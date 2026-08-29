@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Build Desk.app into /Applications. Run again to update it.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+APP="/Applications/Desk.app"
+
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS"
+# LSUIElement is the whole reason this is a bundle and not a bare binary: it is
+# what keeps the icon out of the Dock and the app out of Cmd+Tab.
+cat > "$APP/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleName</key><string>Desk</string>
+  <key>CFBundleIdentifier</key><string>dev.smklabs.desk-bar</string>
+  <key>CFBundleExecutable</key><string>desk-bar</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>LSUIElement</key><true/>
+  <!-- FreeRDP probes the microphone even with -microphone, and a bundle with no
+       usage description is KILLED outright by macOS rather than refused:
+       __TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__, service kTCCServiceMicrophone.
+       With these present a denial is handled gracefully, so it is safe to say
+       no at the prompt. Running from Terminal hid this, because the child
+       inherited Terminal's own grants. -->
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Not used. The remote desktop client probes audio input at startup; this text only stops macOS from killing it.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Not used. Present for the same reason as the microphone entry.</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+</dict></plist>
+PLIST
+
+swiftc -O -o "$APP/Contents/MacOS/desk-bar" "$HERE/desk-bar.swift" \
+  -framework AppKit -target arm64-apple-macos13
+codesign -s - -f "$APP" >/dev/null 2>&1 || true
+
+mkdir -p "$HOME/.config/desk-bar"
+[ -f "$HOME/.config/desk-bar/machines" ] || printf '# name = command\nmybox = desk\n' \
+  > "$HOME/.config/desk-bar/machines"
+
+echo "built $APP"
+echo "machines: $HOME/.config/desk-bar/machines"

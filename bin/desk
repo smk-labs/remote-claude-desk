@@ -1,0 +1,344 @@
+#!/usr/bin/env bash
+# Open the remote Linux desktop. One command.
+#
+#   desk                  connect
+#   desk --stop           close the session from outside (the menu bar uses this)
+#   desk --help           every knob
+#
+# Every run appends to ~/.cache/remote-claude-desk/last.log, so a failure is
+# diagnosable without reproducing it.
+set -uo pipefail
+
+# The whole body lives inside main(), and is deliberately left unindented so the
+# heredocs still read cleanly. That is not a style choice. Bash reads a script
+# incrementally by byte offset, so editing this file while a copy of it is
+# running makes the running shell resume at the wrong offset and die with
+# "command not found" for functions that plainly exist. Wrapping the body in a
+# function forces bash to parse all of it before it runs a line, which makes a
+# mid-session edit harmless.
+main() {
+
+# Resolve the symlink before taking dirname. This is not defensive coding, it is
+# a bug that shipped: desk is meant to be run as ~/bin/desk, a symlink into the
+# repo, and BASH_SOURCE holds the path it was INVOKED by, not the target. So a
+# plain dirname gave ~/bin, the helper next to it was not found there, and the
+# clipboard bridge silently never started. No error, no log line, a working
+# desktop that simply never pasted.
+ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+BIN="$ROOT/bin"
+# shellcheck source=../lib/common.sh
+. "$ROOT/lib/common.sh"
+
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  cat <<'HELP'
+desk: open the remote Linux desktop.
+
+  desk                    connect
+  desk --stop             disconnect an existing session
+  desk --help             this
+
+Per-run knobs, all optional:
+
+  DESK_SIZE=2560x1600     match a different monitor for a 1:1 picture
+  DESK_FULL=1             start fullscreen (brings back the launch flash)
+  DESK_BPP=16             cheaper on bandwidth, dithers antialiased text
+  DESK_CMD=0              send Super through untouched instead of as Ctrl
+  DESK_CLIP=rdp           use the RDP clipboard channel (drops non-ASCII)
+  DESK_SPACES=0           no separate macOS Space, so no launch flash
+  DESK_GFX=1              try the EGFX codec
+  DESK_GDI=sw             software rendering
+  RDP_TUNE=1              bandwidth-saving flags
+
+Settings that belong to the machine, not the run, live in config.sh.
+Run desk-doctor first if anything is not working.
+HELP
+  exit 0
+fi
+
+desk_load_config "$ROOT"
+
+LOGDIR="$HOME/.cache/remote-claude-desk"
+LOG="$LOGDIR/last.log"
+mkdir -p "$DESK_SHARE" "$LOGDIR"
+
+# desk --stop closes the session from outside. Matches only our own client, by
+# the loopback address we tunnel over, so another FreeRDP window is left alone.
+if [ "${1:-}" = "--stop" ]; then
+  pkill -f "[s]dl-freerdp /v:127.0.0.1:${DESK_LOCAL_PORT}" 2>/dev/null
+  desk_say "stopping."
+  exit 0
+fi
+
+desk_ensure_master
+
+# ─── preflight: heal an orphaned session before it kills the connection ──────
+# xrdp-sesman keeps its session list in memory. Unattended upgrades restart it,
+# and any session running at that moment becomes untracked forever: every later
+# connect makes a NEW session, which dies at once because XFCE cannot start
+# twice for one user, and takes the client down with it. The symptom is
+# ERRINFO_LOGOFF_BY_USER and a client that quits a few seconds in.
+#
+# A reaper runs as ExecStartPre on xrdp-sesman and normally handles this. This
+# is the second line of defence, for a sesman that was restarted by something
+# which bypassed it.
+desk_ssh 'bash -s' <<'PREFLIGHT' 2>/dev/null
+sesman_started=$(date -d "$(systemctl show xrdp-sesman -p ActiveEnterTimestamp --value)" +%s 2>/dev/null || echo 0)
+[ "$sesman_started" -gt 0 ] || exit 0
+for p in $(pgrep -u "$(id -un)" -x Xorg 2>/dev/null); do
+  tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'xrdp/xorg.conf' || continue
+  started=$(date -d "$(ps -o lstart= -p "$p")" +%s 2>/dev/null || echo 0)
+  if [ "$started" -gt 0 ] && [ "$started" -lt "$sesman_started" ]; then
+    echo "healing: the session on pid $p predates sesman, so it is orphaned" >&2
+    kill "$p" 2>/dev/null
+  fi
+done
+sleep 2
+exit 0
+PREFLIGHT
+
+desk_forward
+
+# ─── the connection flags ────────────────────────────────────────────────────
+# Every one of these is here because the obvious alternative broke something.
+# docs/why-these-settings.md is the reasoning; this is the summary.
+if [ "${DESK_CLIP:-bridge}" = "rdp" ]; then CLIP_ARG="+clipboard"; else CLIP_ARG="-clipboard"; fi
+
+ARGS=(
+  /v:127.0.0.1:"$DESK_LOCAL_PORT" /u:"$DESK_USER"
+  /cert:ignore /sec:rdp
+  "$CLIP_ARG"                   # NOT a downgrade. The RDP clipboard carries
+                                # ASCII and silently drops everything else.
+                                # Measured against a live session, reading the
+                                # pasteboard through NSPasteboard so no shell
+                                # locale could lie about it:
+                                #   ASCII 21 bytes -> 21 bytes, exact
+                                #   Persian 54 bytes -> 0 bytes
+                                #   ASCII again -> exact, so not wedged
+                                # FreeRDP logs it itself at those moments:
+                                # "ClipboardGetData: No synthesizer for format
+                                #  CF_RAW --> text/plain". /clipboard: has no
+                                # encoding option, so there is nothing to tune.
+                                # Text rides the SSH master instead, through
+                                # desk-clip. Leaving the channel ON as well is
+                                # not an option: xrdp-chansrv and the bridge
+                                # both want to own the X CLIPBOARD selection,
+                                # and chansrv wins often enough to hand back
+                                # the broken copy at random. One owner or none.
+                                #   DESK_CLIP=rdp desk   old behaviour back
+  /drive:mac,"$DESK_SHARE"
+  -sound -microphone            # the correct way to disable; /sound:off is not
+                                # a key FreeRDP knows
+  /rfx                          # RemoteFX. The server advertises codec id 3.
+                                # Without it, updates take the legacy bitmap PDU
+                                # path, and that is what dies after a resize:
+                                # "UPDATE_TYPE Bitmap [1] failed" kills the link.
+  /log-level:INFO
+)
+
+# Sizing. The hard constraint is that xrdp 0.9.24 CANNOT survive a live desktop
+# resize: the moment the size changes it re-runs capability exchange and the
+# next frame dies, taking the connection with it. Confirmed with RemoteFX on and
+# off, so it is not the codec.
+#
+# So the desktop size is fixed and never renegotiated. /smart-sizing makes the
+# client scale that fixed desktop to whatever the window is, which keeps the
+# window resizable, the green button working and fullscreen working, while the
+# server never learns the size changed.
+ARGS+=( /size:"${DESK_SIZE:-1920x1080}" /smart-sizing )
+[ "${DESK_FULL:-0}" = "1" ] && ARGS+=( /f )
+
+# Colour depth. MUST be 16 or 32, never 24: at 3 bytes per pixel the stride does
+# not match xrdp's 4-byte framebuffer and the screen tears into vertical
+# stripes. 32 is what xrdp renders natively, so it is also the cheapest.
+ARGS+=( /bpp:"${DESK_BPP:-32}" )
+
+[ -n "${DESK_GDI:-}" ] && ARGS+=( /gdi:"$DESK_GDI" )
+
+# Command key. macOS sends Cmd as the Super key, which Linux ignores for copy
+# and paste, so without this Cmd+C does nothing at all. The scancodes are not a
+# guess: `sdl-freerdp /list:kbd-scancode` gives 0x15b VK_LWIN, 0x15c VK_RWIN,
+# 0x1d VK_LCONTROL.
+#
+# Doing it here and not in Karabiner is deliberate, for two reasons. It cannot
+# leak out of this connection, so the Mac is untouched everywhere else. And it
+# is downstream of everything, so it also catches a paste that another tool
+# synthesises as a CGEvent, which a Karabiner rule never sees.
+#
+# What it costs: the session never receives Super at all, so XFCE's Super
+# shortcuts (the whisker menu) are gone. Ctrl on the Mac keyboard still works.
+[ "${DESK_CMD:-1}" = "1" ] && ARGS+=( /kbd:remap:0x15b=0x1d,remap:0x15c=0x1d )
+
+# EGFX, off by default. xrdp 0.9.24's support is partial; turn it on only once a
+# plain session is known clean.
+[ "${DESK_GFX:-0}" = "1" ] && ARGS+=( /gfx:progressive )
+
+# Tuning, added only when asked, so a crash here is attributable.
+if [ "${RDP_TUNE:-0}" = "1" ]; then
+  ARGS+=( /compression-level:2 /network:broadband
+          -wallpaper -themes -menu-anims -window-drag )
+fi
+
+# macOS Spaces. A straight trade-off, not a bug to fix:
+#   1 (default) fullscreen gets its own Space, so a three-finger swipe reaches
+#               it and the green button works. Cost: FreeRDP builds a window,
+#               tears it down, then builds the session window, so the Space is
+#               created and destroyed once at startup and the screen flashes.
+#   0           stays on the current desktop. No flash, but no Space either.
+export SDL_VIDEO_MAC_FULLSCREEN_SPACES="${DESK_SPACES:-1}"
+
+desk_say "log: $LOG"
+{ echo; echo "===== $(date) ====="; echo "args: ${ARGS[*]}"; } >> "$LOG"
+
+# ─── helpers that live exactly as long as the client ─────────────────────────
+HELPERS=()
+
+cleanup() {
+  local p
+  for p in "${HELPERS[@]:-}"; do kill "$p" 2>/dev/null || true; done
+  HELPERS=()
+  # Belt and braces, in case a helper died without cleaning up after itself.
+  # desk_remote_pkill brackets the pattern so it cannot match the ssh shell
+  # that is running it, which used to kill the cleanup halfway through.
+  desk_remote_pkill "deskclip-agent"
+  desk_remote_pkill "xclip -selection clipboard"
+}
+trap cleanup EXIT INT TERM
+
+# Wait for the session's X display to exist, then set up everything that needs
+# to talk to it.
+#
+# The display is DISCOVERED, not assumed. It used to be the constant :150, and
+# that is wrong whenever a session fails to start there and xrdp hands out :151
+# next: the layout is then pushed at a display that is not there and the
+# clipboard bridge owns a selection nobody reads. Both fail silently.
+#
+# It also has to WAIT, because on a first connect the session does not exist
+# yet when this runs. Bounded at 15 tries, 2 seconds apart, so 30 seconds worst
+# case and never forever.
+#
+# It runs in the background, which means it runs in a SUBSHELL, so anything it
+# adds to HELPERS is added to its own copy and the parent never sees it. That
+# is why it keeps and kills its own children here rather than reporting them
+# upwards: without this, desk-clip outlived desk, kept the SSH channel open and
+# went on owning the remote clipboard selection after the window had closed.
+session_helper() {
+  local display="" i
+  local kids=()
+  # shellcheck disable=SC2317,SC2329  # invoked by the trap below, not by name
+  _reap() { local k; for k in "${kids[@]:-}"; do kill "$k" 2>/dev/null; done; }
+  trap _reap EXIT TERM INT
+
+  for i in $(seq 1 15); do
+    sleep 2
+    display="$(desk_remote_display 2>/dev/null)" || display=""
+    [ -n "$display" ] && break
+  done
+
+  if [ -z "$display" ]; then
+    desk_warn "session: could not find an X display at or above :$DESK_DISPLAY_MIN after 30s."
+    desk_warn "         The keyboard layout and the clipboard bridge are both off."
+    desk_warn "         Run desk-doctor to see why."
+    return 1
+  fi
+  desk_say "session: display $display"
+
+  apply_layout "$display" &
+  kids+=($!)
+
+  # The -x test used to be the whole condition, so a missing desk-clip meant a
+  # session with no clipboard at all and not one word about why. Say it instead.
+  if [ "${DESK_CLIP:-bridge}" != "rdp" ]; then
+    if [ -x "$BIN/desk-clip" ]; then
+      DESK_DISPLAY="$display" "$BIN/desk-clip" &
+      kids+=($!)
+    else
+      desk_warn "clipboard: desk-clip is not at $BIN/desk-clip, so text will NOT cross."
+    fi
+  fi
+
+  # Stay alive while the children do. The trap above fires when this is killed,
+  # which is what actually stops them.
+  wait
+}
+
+# Push the keyboard layout into the live X session.
+#
+# xfconf may already say what you want, but the live X server comes up as plain
+# "us": xrdp sets the keymap from what the client announces, and it does that
+# AFTER xfce4-settings has had its say. So the layout has to be pushed back per
+# connection, from here. Nothing is written to any server config.
+#
+# Bounded: 12 tries, 2 seconds apart, and it wants three consecutive successes
+# before it believes the answer, because the first one can land while xrdp is
+# still writing over it.
+apply_layout() {
+  local display="$1" i ok=0
+  for i in $(seq 1 12); do
+    sleep 2
+    desk_ssh "export DISPLAY='$display' XAUTHORITY=\$HOME/.Xauthority
+       setxkbmap -layout '$DESK_LAYOUTS' -option '' -option '$DESK_LAYOUT_TOGGLE' 2>/dev/null
+       # The language key. On a Mac the Fn/globe key is the input switcher, and
+       # a Karabiner rule turns it into Shift+Option inside a remote desktop.
+       # That rule is scoped by app, and app matching for a binary with no
+       # bundle id cannot be checked from here, so F13 to F24 are bound as a
+       # second, verified route: when the Karabiner rule does not fire, Fn
+       # arrives as F18 instead. All twelve keycodes are empty and unreachable
+       # from a Mac keyboard except through Karabiner, so claiming the range
+       # costs nothing and removes the guess about which one Fn lands on.
+       for k in \$(seq 191 202); do xmodmap -e \"keycode \$k = ISO_Next_Group\" 2>/dev/null; done
+       setxkbmap -query | grep -q \"^layout: *$DESK_LAYOUTS\$\"" >/dev/null 2>&1 \
+      && ok=$((ok + 1)) || ok=0
+    if [ "$ok" -ge 3 ]; then
+      case "$DESK_LAYOUTS" in
+        *,*) desk_say "keyboard: $DESK_LAYOUTS ready (Option+Shift switches)" ;;
+        *)   desk_say "keyboard: $DESK_LAYOUTS ready" ;;
+      esac
+      return 0
+    fi
+  done
+  desk_warn "keyboard: could not confirm '$DESK_LAYOUTS' after 12 tries."
+  return 1
+}
+
+# Run the client. The password is read from the Keychain and handed to FreeRDP
+# on stdin, so it never appears in `ps` or in a file.
+run_client() {
+  local rc
+  if security find-generic-password -s "$DESK_KEYCHAIN_SERVICE" -a "$DESK_USER" -w >/dev/null 2>&1; then
+    security find-generic-password -s "$DESK_KEYCHAIN_SERVICE" -a "$DESK_USER" -w \
+      | sdl-freerdp "${ARGS[@]}" /from-stdin:force 2>&1 | tee -a "$LOG"
+    # Index 1, not 0. The pipeline is security | sdl-freerdp | tee, so index 0
+    # is the Keychain lookup, which all but always succeeds. Reading index 0
+    # here meant desk always exited 0 and the failure excerpt below never
+    # printed, which is exactly when you most want it.
+    rc="${PIPESTATUS[1]}"
+  else
+    desk_warn "No Keychain item for '$DESK_KEYCHAIN_SERVICE'. Run: desk-setup"
+    sdl-freerdp "${ARGS[@]}" 2>&1 | tee -a "$LOG"
+    rc="${PIPESTATUS[0]}"
+  fi
+  return "$rc"
+}
+
+session_helper &
+HELPERS+=($!)
+
+run_client
+rc=$?
+cleanup
+echo "exit=$rc" >> "$LOG"
+
+if [ "$rc" -ne 0 ]; then
+  echo
+  echo "--- last failure, from the log ---"
+  grep -iE 'FATAL|ERROR' "$LOG" \
+    | grep -viE 'tcsetattr|tcgetattr|backtrace|log_build_warn' \
+    | tail -6 | cut -c1-190
+  echo
+  echo "desk-doctor checks every precondition and usually names the cause."
+fi
+exit "$rc"
+
+}
+
+main "$@"

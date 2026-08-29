@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Claude Desktop, isolated from @DESK_HOME@/.claude, @DESK_HOME@/.claude.json
+# and every other user on this machine.
+set -euo pipefail
+ROOT=@DESK_ISOLATED_ROOT@
+
+# The installer stamps in the account this copy belongs to. ROOT is chmod 700,
+# so another user gets a confusing permissions error several lines later
+# instead of this one clear line.
+[ "$(id -un)" = "@DESK_USER@" ] || { echo "Refusing: this launcher belongs to @DESK_USER@, you are $(id -un)." >&2; exit 1; }
+
+# --- guard: never attach to another user's X display -------------------------
+d="${DISPLAY:-}"
+[ -n "$d" ] || { echo "No DISPLAY. Run this inside the RDP session." >&2; exit 1; }
+n="${d#:}"; n="${n%%.*}"
+case "$n" in ''|*[!0-9]*) echo "Refusing: DISPLAY='$d' is not a plain display." >&2; exit 1 ;; esac
+[ "$n" -ge @DESK_DISPLAY_MIN@ ] || { echo "Refusing: :$n belongs to another user on this shared box." >&2; exit 1; }
+owner=$(stat -c %U "/tmp/.X11-unix/X$n" 2>/dev/null || echo "?")
+[ "$owner" = "$(id -un)" ] || { echo "Refusing: display :$n is owned by '$owner'." >&2; exit 1; }
+
+# --- isolated state ----------------------------------------------------------
+# CLAUDE_CONFIG_DIR is the one that matters: without it a Code session started
+# from this app reads plugins, skills and MCP servers from the central ~/.claude.
+export CLAUDE_CONFIG_DIR="$ROOT/claude-config"
+export XDG_CONFIG_HOME="$ROOT/xdg/config"
+export XDG_CACHE_HOME="$ROOT/xdg/cache"
+mkdir -p "$CLAUDE_CONFIG_DIR" "$ROOT"/xdg/{config,cache} "$ROOT"/{profile,work,logs}
+chmod 700 "$ROOT" 2>/dev/null || true
+
+# XDG_DATA_HOME is deliberately NOT redirected. The secret store is the session
+# keyring, which pam_gnome_keyring unlocks with the RDP login password. Pointing
+# the app at a different data dir does not move that keyring (it lives with the
+# daemon that owns org.freedesktop.secrets), it only breaks the lookup.
+
+cd "$ROOT/work"
+exec /usr/bin/claude-desktop \
+  --user-data-dir="$ROOT/profile" \
+  --disable-gpu --disable-gpu-compositing \
+  --password-store=gnome-libsecret \
+  "$@" >>"$ROOT/logs/desktop.log" 2>&1

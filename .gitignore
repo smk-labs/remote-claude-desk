@@ -1,0 +1,15 @@
+# Your machine's settings. This is the file that holds the host, the user and
+# anything else specific to you, so it must never be committed.
+config.sh
+
+# Timestamped backups written by the installers and by earlier versions.
+*.bak
+*.bak-*
+*.bak.*
+*.rcd-bak-*
+
+# Logs and caches.
+*.log
+__pycache__/
+*.pyc
+.DS_Store

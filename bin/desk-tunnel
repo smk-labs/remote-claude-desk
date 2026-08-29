@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Forward the RDP port and stop there, for use with a native client such as
+# Microsoft's Windows App. Everything the `desk` client does for you (the Cmd
+# remap, the keyboard layout, the clipboard bridge) is NOT set up by this: a
+# native client is on its own.
+set -uo pipefail
+
+ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+. "$ROOT/lib/common.sh"
+
+desk_load_config "$ROOT"
+desk_ensure_master
+desk_forward
+
+cat <<INFO
+Tunnel up on 127.0.0.1:${DESK_LOCAL_PORT}
+
+In your RDP client, add a PC:
+  PC name    localhost:${DESK_LOCAL_PORT}
+  User       ${DESK_USER}
+  Folders    add ${DESK_SHARE} to get the shared drive
+
+The tunnel stays up as long as the SSH master lives.
+INFO

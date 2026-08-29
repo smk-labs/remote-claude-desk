@@ -1,0 +1,16 @@
+#!/bin/sh
+# Runs just before xrdp-sesman starts. sesman keeps its session list in memory,
+# so a session that survives a sesman restart is untracked forever: every later
+# connect makes a NEW session, which dies at once because XFCE cannot start
+# twice for one user, and takes the client with it.
+#
+# At this moment sesman has no sessions, so any xrdp X server still running is
+# by definition orphaned. Killing it loses nothing that was still reachable.
+for p in $(pgrep -x Xorg 2>/dev/null); do
+  cmd=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null) || continue
+  case "$cmd" in
+    *xrdp/xorg.conf*) logger -t xrdp-reap-orphans "killing orphaned Xorg $p"
+                      kill "$p" 2>/dev/null ;;
+  esac
+done
+exit 0

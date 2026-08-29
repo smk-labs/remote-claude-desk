@@ -1,0 +1,14 @@
+# Checks disabled repo-wide, each with the reason. Nothing here is disabled to
+# silence a real finding.
+
+# SC2054: commas inside FreeRDP flag values are part of the value, not array
+# separators. /drive:mac,<path> and /kbd:remap:A=B,remap:C=D are its own syntax.
+disable=SC2054
+
+# SC2088: the strings that mention ~/bin are messages printed to a person, who
+# reads "~/bin" more easily than an expanded home directory. They are never
+# used as paths; the paths beside them are built from $HOME.
+disable=SC2088
+
+# SC2034: seq loop counters that exist only to bound the loop.
+disable=SC2034

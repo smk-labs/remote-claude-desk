@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+"""Text clipboard bridge between this Mac and the remote Linux desktop.
+
+Started and stopped by `desk`. It reads its settings from the environment,
+which `desk` exports: DESK_HOST, DESK_SSH_SOCKET, DESK_DISPLAY.
+
+Why this exists instead of the RDP clipboard channel
+----------------------------------------------------
+The RDP clipboard carries ASCII and silently drops everything else. Measured
+against a live session, with the pasteboard read through NSPasteboard so no
+shell locale sits anywhere in the path:
+
+  "ASCII-VIA-CLIPRDR-777"  ->  21 bytes on the remote clipboard, exact
+  Persian, 54 bytes        ->  0 bytes. The X selection changes owner and then
+                               serves nothing at all.
+  "ASCII-AGAIN-888"        ->  15 bytes, exact. So the channel is not wedged,
+                               it just cannot carry this item.
+
+FreeRDP says so itself in the log, at exactly those moments:
+
+  [ERROR][com.winpr.clipboard] - [ClipboardGetData]: No synthesizer for format
+  CF_RAW [0x00000000] --> text/plain [0x0000c000]
+
+`/clipboard:` has only use-selection, direction-to and files-to, so there is no
+encoding or format option to fix it with. Text therefore rides the SSH master
+that is already up for the tunnel: base64 in, base64 out, no codepage anywhere.
+
+Cost, stated plainly: this carries TEXT only. Images and files still go through
+the shared drive. And `desk` has to run the RDP channel OFF, because two owners
+of the X CLIPBOARD selection race, and xrdp-chansrv wins often enough to hand
+back the broken copy.
+
+A trap worth naming, because it cost hours
+------------------------------------------
+`pbcopy` and `pbpaste` pick their encoding from the caller's locale, and Python
+exports LC_CTYPE=C.UTF-8 to its children. That is a glibc name macOS does not
+know, so both tools fall back to MacRoman and quietly mangle non-ASCII text.
+Worse, a pbcopy/pbpaste round trip still MATCHES, because both ends mangle the
+same way. That is a test passing for the wrong reason, and it produced a
+completely wrong diagnosis before NSPasteboard was used as the referee. Hence
+PB_ENV below: the locale is pinned for every pasteboard call, never inherited.
+"""
+
+import base64
+import os
+import signal
+import subprocess
+import sys
+import threading
+import time
+
+HOST = os.environ.get("DESK_HOST", "")
+SOCKET = os.environ.get("DESK_SSH_SOCKET", "")
+DISPLAY = os.environ.get("DESK_DISPLAY", "")
+
+MAC_POLL = 0.10          # local and free, so poll it fast
+START_TIMEOUT = 20.0     # ceiling on bringing the agent up
+RETRY_WAIT = 3.0         # between reconnect attempts
+MAX_CONSECUTIVE_FAILURES = 10   # about 30s of failing before we give up loudly
+
+# The agent script lives under the remote user's own cache directory, never in
+# /tmp. On a shared box /tmp is writable by every tenant, so a fixed name there
+# is a path another user can own first: our write then fails, or worse, theirs
+# is the file that runs. $HOME is ours alone.
+AGENT_DIR = ".cache/remote-claude-desk"
+AGENT = AGENT_DIR + "/deskclip-agent.py"
+
+# pbcopy/pbpaste read their encoding from the environment, and an inherited
+# LC_CTYPE=C.UTF-8 makes them fall back to MacRoman. Pin it, do not inherit it.
+PB_ENV = {k: v for k, v in os.environ.items()
+          if k not in ("LC_ALL", "LC_CTYPE", "LANG")}
+PB_ENV["LC_ALL"] = "en_US.UTF-8"
+
+# Nothing sane is copied at this size, and a runaway feedback loop between the
+# two clipboards IS the thing that grows past it. An early version of this
+# bridge bounced 35 -> 69 -> 137 -> 1998 bytes and kept going, which froze a
+# paste inside the session. The loop is fixed now, but a hard ceiling costs one
+# comparison and turns any future version of that bug into a skipped item
+# instead of a hang.
+MAX_BYTES = 2 * 1024 * 1024
+
+
+def log(msg):
+    sys.stderr.write("desk-clip: %s\n" % msg)
+    sys.stderr.flush()
+
+
+# ─────────────────────────────────────────────────────────── the remote agent
+# Runs on the server. Reads "SET <b64>" lines, owns the X CLIPBOARD selection
+# through xclip, and prints "CLIP <b64>" when something ELSE in the session
+# copies. It never echoes back a value it set itself, which is what stops the
+# ping-pong.
+REMOTE_AGENT = r'''
+import base64, os, subprocess, sys, threading, time
+DISP = sys.argv[1]
+ENV  = dict(os.environ, DISPLAY=DISP, XAUTHORITY=os.path.expanduser("~/.Xauthority"))
+owner = [None]      # the live `xclip -i` process
+mine  = [None]      # the value we last SET, cleared the first time the poll
+                    # sees it. ONE shot, not a history: a remembered list meant
+                    # that when the session copied text the Mac had held
+                    # earlier, it was mistaken for our own echo and never
+                    # reached the Mac at all.
+quiet = [0.0]       # ignore polls for a moment after a SET, so a read that
+                    # lands before xclip owns the selection cannot report the
+                    # previous value as if someone had just copied it.
+
+def set_clip(data):
+    if owner[0] and owner[0].poll() is None:
+        owner[0].terminate()
+        try: owner[0].wait(timeout=2)
+        except Exception: owner[0].kill()
+    mine[0]  = data
+    quiet[0] = time.time() + 0.8
+    owner[0] = subprocess.Popen(["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-i"],
+                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, env=ENV)
+    owner[0].stdin.write(data); owner[0].stdin.close()
+
+def reader():
+    for line in sys.stdin:
+        line = line.strip()
+        if line.startswith("SET "):
+            try: set_clip(base64.b64decode(line[4:]))
+            except Exception as e: sys.stderr.write("agent set: %r\n" % (e,))
+        elif line == "BYE":
+            os._exit(0)
+    os._exit(0)     # stdin closed: the Mac side is gone, so go with it rather
+                    # than sitting on the X selection forever.
+
+threading.Thread(target=reader, daemon=True).start()
+sys.stdout.write("READY\n"); sys.stdout.flush()
+last = None
+while True:
+    time.sleep(0.4)
+    if time.time() < quiet[0]:
+        continue
+    try:
+        p = subprocess.run(["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-o"], env=ENV,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        cur = p.stdout if p.returncode == 0 else b""
+    except Exception:
+        continue
+    if not cur or cur == last:
+        continue
+    if cur == mine[0]:      # our own echo, once
+        mine[0] = None
+        last = cur
+        continue
+    last = cur
+    sys.stdout.write("CLIP " + base64.b64encode(cur).decode() + "\n")
+    sys.stdout.flush()
+'''
+
+
+def ssh(args, **kw):
+    return subprocess.run(
+        ["ssh", "-o", "ConnectTimeout=10", "-S", SOCKET, HOST] + args, **kw)
+
+
+def install_agent():
+    """Write the agent into the remote user's own cache dir. One round trip."""
+    r = ssh(["mkdir -p ~/%s && chmod 700 ~/%s && cat > ~/%s"
+             % (AGENT_DIR, AGENT_DIR, AGENT)],
+            input=REMOTE_AGENT.encode(), timeout=30)
+    return r.returncode == 0
+
+
+def start_agent():
+    """Bring one agent up and wait for READY. Returns the process or None."""
+    ag = subprocess.Popen(
+        ["ssh", "-o", "ConnectTimeout=10", "-S", SOCKET, HOST,
+         "python3 -u ~/%s %s" % (AGENT, DISPLAY)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+
+    deadline = time.time() + START_TIMEOUT
+    while time.time() < deadline:
+        line = ag.stdout.readline()
+        if line.strip() == b"READY":
+            return ag
+        if not line:
+            log("agent died on startup")
+            return None
+    ag.kill()
+    log("agent did not report READY within %.0fs, killed it" % START_TIMEOUT)
+    return None
+
+
+def pump(ag):
+    """Carry the clipboard both ways until the agent goes away.
+
+    One "last value seen" per direction, which is all a bridge needs. An earlier
+    version kept a HISTORY of everything it had carried and skipped anything
+    already in it. That stopped the ping-pong but broke two real cases: copying
+    the same text twice did nothing the second time, and re-copying on the Mac
+    something you had pasted out of the session silently did nothing.
+
+    Change detection per side has neither problem. A value arriving FROM the
+    remote is recorded as the Mac's current value at the same moment it is
+    written there, so the Mac poll sees no change and cannot send it back.
+    """
+    last = {"mac": None, "remote": None}
+    warned = {"big": None}
+    lock = threading.Lock()
+
+    def from_remote():
+        for line in ag.stdout:
+            if not line.startswith(b"CLIP "):
+                continue
+            try:
+                data = base64.b64decode(line[5:].strip())
+            except Exception:
+                continue
+            if len(data) > MAX_BYTES:
+                log("remote clipboard is %d bytes, over the limit; ignoring"
+                    % len(data))
+                continue
+            with lock:
+                if data == last["remote"]:
+                    continue
+                last["remote"] = data
+                last["mac"] = data     # BEFORE the write, so the Mac poll
+                                       # cannot race in and bounce it back
+            subprocess.run(["pbcopy"], input=data, env=PB_ENV)
+
+    threading.Thread(target=from_remote, daemon=True).start()
+
+    # Mac to remote. pbpaste is local and free, so poll it fast: a dictation
+    # tool may set the pasteboard and synthesise Cmd+V 600 ms later, and the
+    # push has to land inside that window. Measured: about 100 ms to notice
+    # plus about 150 ms one way.
+    while True:
+        if ag.poll() is not None:
+            log("agent exited (rc=%s)" % ag.returncode)
+            return
+        try:
+            data = subprocess.run(["pbpaste"], stdout=subprocess.PIPE,
+                                  timeout=5, env=PB_ENV).stdout
+        except Exception:
+            time.sleep(MAC_POLL)
+            continue
+        if data and len(data) > MAX_BYTES:
+            if warned["big"] != len(data):
+                warned["big"] = len(data)
+                log("clipboard is %d bytes, over the %d limit; not syncing it"
+                    % (len(data), MAX_BYTES))
+            time.sleep(MAC_POLL)
+            continue
+        if data:
+            with lock:
+                new = data != last["mac"]
+                if new:
+                    last["mac"] = data
+                    last["remote"] = data
+            if new:
+                try:
+                    ag.stdin.write(b"SET " + base64.b64encode(data) + b"\n")
+                    ag.stdin.flush()
+                except Exception:
+                    log("lost the agent channel")
+                    return
+        time.sleep(MAC_POLL)
+
+
+def main():
+    for name, value in (("DESK_HOST", HOST), ("DESK_SSH_SOCKET", SOCKET),
+                        ("DESK_DISPLAY", DISPLAY)):
+        if not value:
+            log("%s is not set. desk-clip is started by desk, not by hand."
+                % name)
+            return 2
+
+    current = {"agent": None}
+
+    # Clean up after ourselves on the way out. Without this, a terminated
+    # bridge left the remote agent holding the X CLIPBOARD selection, and the
+    # next session inherited a clipboard nothing was feeding.
+    def bye(_signum=None, _frame=None):
+        ag = current["agent"]
+        if ag and ag.poll() is None:
+            try:
+                ag.stdin.write(b"BYE\n")
+                ag.stdin.flush()
+            except Exception:
+                pass
+            try:
+                ag.wait(timeout=3)
+            except Exception:
+                ag.kill()
+        sys.exit(0)
+
+    signal.signal(signal.SIGTERM, bye)
+    signal.signal(signal.SIGINT, bye)
+
+    if not install_agent():
+        log("could not install the remote agent, giving up")
+        return 1
+
+    # Reconnect rather than exit. The SSH master can drop while the session
+    # itself is perfectly fine, and the old behaviour was to return here and
+    # leave `desk` running with a clipboard that had silently stopped working.
+    # Bounded: consecutive failures are counted, so a genuinely broken setup
+    # says so instead of retrying forever.
+    failures = 0
+    first = True
+    while failures < MAX_CONSECUTIVE_FAILURES:
+        ag = start_agent()
+        if ag is None:
+            failures += 1
+            time.sleep(RETRY_WAIT)
+            continue
+        current["agent"] = ag
+        if first:
+            log("bridge up on %s (text only)" % DISPLAY)
+            first = False
+        else:
+            log("bridge back up on %s" % DISPLAY)
+
+        started = time.time()
+        pump(ag)
+        current["agent"] = None
+
+        # A session that reported READY and then died at once is a failure, not
+        # a success. Resetting the counter on READY alone would spin forever
+        # against a display that has gone away, which is exactly the case this
+        # loop exists to survive.
+        if time.time() - started < 5.0:
+            failures += 1
+        else:
+            failures = 0
+
+        log("reconnecting in %.0fs..." % RETRY_WAIT)
+        time.sleep(RETRY_WAIT)
+
+    log("gave up after %d consecutive failures; text will not cross."
+        % MAX_CONSECUTIVE_FAILURES)
+    return 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        sys.exit(0)

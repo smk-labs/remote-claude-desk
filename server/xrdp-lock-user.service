@@ -1,0 +1,12 @@
+[Unit]
+Description=Restrict xrdp @DESK_RDP_ADDR@:@DESK_RDP_PORT@ to uid @DESK_USER@
+After=network.target
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/iptables -I OUTPUT 1 -o lo -p tcp -d @DESK_RDP_ADDR@ --dport @DESK_RDP_PORT@ -m owner ! --uid-owner @DESK_USER@ -j REJECT --reject-with tcp-reset
+ExecStart=/sbin/iptables -I OUTPUT 1 -o lo -p tcp -d @DESK_RDP_ADDR@ --dport @DESK_RDP_PORT@ -m owner --uid-owner 0 -j ACCEPT
+ExecStop=/sbin/iptables -D OUTPUT -o lo -p tcp -d @DESK_RDP_ADDR@ --dport @DESK_RDP_PORT@ -m owner ! --uid-owner @DESK_USER@ -j REJECT --reject-with tcp-reset
+ExecStop=/sbin/iptables -D OUTPUT -o lo -p tcp -d @DESK_RDP_ADDR@ --dport @DESK_RDP_PORT@ -m owner --uid-owner 0 -j ACCEPT
+[Install]
+WantedBy=multi-user.target

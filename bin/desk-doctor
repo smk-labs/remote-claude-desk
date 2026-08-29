@@ -1,0 +1,306 @@
+#!/usr/bin/env bash
+# Check every precondition and say which one is wrong.
+#
+# This exists because almost every failure in this setup looks like the same
+# thing from the outside: a window that does not open, or one that opens and
+# quits. The cause is somewhere in a chain of about twenty links, and guessing
+# which one costs an evening. Each check below is a link in that chain, and
+# most of them are a bug that actually happened.
+#
+#   desk-doctor            check everything
+#   desk-doctor --local    skip the checks that need the server
+#
+# Exits non-zero if anything is broken, so it also works in a script.
+set -uo pipefail
+
+ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+. "$ROOT/lib/common.sh"
+
+PASS=0 WARN=0 FAIL=0
+ok()   { printf '  ok    %s\n' "$*"; PASS=$((PASS + 1)); }
+warn() { printf '  warn  %s\n' "$*"; WARN=$((WARN + 1)); }
+bad()  { printf '  FAIL  %s\n' "$*"; FAIL=$((FAIL + 1)); }
+fix()  { printf '        -> %s\n' "$*"; }
+head_() { printf '\n%s\n' "$*"; }
+
+LOCAL_ONLY=0
+[ "${1:-}" = "--local" ] && LOCAL_ONLY=1
+if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+  sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'
+  exit 0
+fi
+
+# ─── config ──────────────────────────────────────────────────────────────────
+head_ "Config"
+CONFIG=""
+for c in "$HOME/.config/remote-claude-desk/config.sh" "$ROOT/config.sh"; do
+  [ -f "$c" ] && { CONFIG="$c"; break; }
+done
+if [ -z "$CONFIG" ]; then
+  bad "no config.sh"
+  fix "cp $ROOT/config.example.sh $ROOT/config.sh, then set DESK_HOST and DESK_USER"
+  echo
+  echo "Nothing else can be checked without it."
+  exit 1
+fi
+ok "config at $CONFIG"
+desk_load_config "$ROOT"
+ok "host '$DESK_HOST', user '$DESK_USER', listener $DESK_RDP_ADDR:$DESK_RDP_PORT"
+
+# ─── the Mac side ────────────────────────────────────────────────────────────
+head_ "This Mac"
+
+if command -v sdl-freerdp >/dev/null 2>&1; then
+  ok "sdl-freerdp: $(sdl-freerdp /version 2>/dev/null | head -1 | cut -c1-60)"
+else
+  bad "sdl-freerdp is not on PATH"
+  fix "brew install freerdp"
+fi
+
+# sdl-freerdp and not xfreerdp is deliberate: xfreerdp needs XQuartz.
+command -v xfreerdp >/dev/null 2>&1 && [ ! -x "$(command -v sdl-freerdp 2>/dev/null)" ] \
+  && warn "only xfreerdp is present, which needs XQuartz; sdl-freerdp does not"
+
+command -v python3 >/dev/null 2>&1 \
+  && ok "python3 present (the clipboard bridge needs it)" \
+  || bad "python3 missing, so the clipboard bridge cannot run"
+
+case ":$PATH:" in
+  *":$HOME/bin:"*) ok "~/bin is on PATH" ;;
+  *) warn "~/bin is not on PATH, so 'desk' will not resolve"
+     fix "add to your shell profile:  export PATH=\"\$HOME/bin:\$PATH\"" ;;
+esac
+
+for name in desk desk-doctor desk-tunnel; do
+  link="$HOME/bin/$name"
+  if [ ! -e "$link" ]; then
+    warn "~/bin/$name is missing"
+    fix "run $ROOT/mac/install.sh"
+  elif [ "$(desk_resolve "$link")" = "$ROOT/bin/$name" ]; then
+    ok "~/bin/$name points into this repo"
+  else
+    warn "~/bin/$name points at $(desk_resolve "$link"), not this repo"
+  fi
+done
+
+# The whole reason the symlink is resolved before dirname. A stale link that
+# resolves nowhere used to mean a session with no clipboard and no message.
+[ -x "$ROOT/bin/desk-clip" ] \
+  && ok "desk-clip is next to desk" \
+  || bad "desk-clip is missing from $ROOT/bin, so text will not cross"
+
+if security find-generic-password -s "$DESK_KEYCHAIN_SERVICE" -a "$DESK_USER" -w >/dev/null 2>&1; then
+  ok "Keychain item '$DESK_KEYCHAIN_SERVICE' for '$DESK_USER'"
+else
+  bad "no Keychain item, so the RDP login will prompt every time"
+  fix "run desk-setup"
+fi
+
+[ -d "$DESK_SHARE" ] \
+  && ok "shared folder $DESK_SHARE" \
+  || warn "shared folder $DESK_SHARE does not exist yet (desk creates it)"
+
+# The client's own shortcuts default to Right Shift, so Right Shift plus Enter
+# toggled fullscreen and Right Shift plus M minimised, which read as the remote
+# desktop ignoring the key.
+if [ -f "$HOME/.config/freerdp/sdl-freerdp.json" ] \
+   && grep -q SDL_KeyModMask "$HOME/.config/freerdp/sdl-freerdp.json" 2>/dev/null; then
+  ok "FreeRDP shortcut override installed (Shift+Enter reaches the session)"
+else
+  warn "no FreeRDP shortcut override, so Shift+Enter toggles fullscreen instead"
+  fix "run $ROOT/mac/install.sh"
+fi
+
+if [ -d "$HOME/.config/karabiner" ]; then
+  if grep -rqs 'sdl-freerdp' "$HOME/.config/karabiner/karabiner.json" 2>/dev/null; then
+    ok "Karabiner rules are enabled for sdl-freerdp"
+  else
+    warn "Karabiner is installed but no rule targets sdl-freerdp"
+    fix "run mac/install.sh, then enable the rules in Karabiner's UI"
+  fi
+else
+  warn "Karabiner-Elements is not installed (Cmd+arrow, Cmd+Q and Fn stay unmapped)"
+fi
+
+# ─── ssh ─────────────────────────────────────────────────────────────────────
+head_ "SSH"
+
+if ssh -G "$DESK_HOST" >/dev/null 2>&1; then
+  cpath="$(ssh -G "$DESK_HOST" 2>/dev/null | awk '/^controlpath /{print $2}')"
+  cpath="${cpath/#\~/$HOME}"
+  ok "host '$DESK_HOST' resolves in the ssh config"
+  if [ -z "$cpath" ] || [ "$cpath" = "none" ]; then
+    bad "that host has no ControlPath, so the multiplexed master cannot be shared"
+    fix "add to ~/.ssh/config:  ControlMaster auto / ControlPath $DESK_SSH_SOCKET / ControlPersist yes"
+  elif [ "$cpath" != "$DESK_SSH_SOCKET" ]; then
+    bad "ControlPath is '$cpath' but DESK_SSH_SOCKET is '$DESK_SSH_SOCKET'"
+    fix "make the two match, or every command opens its own connection"
+  else
+    ok "ControlPath matches DESK_SSH_SOCKET"
+  fi
+else
+  bad "'$DESK_HOST' is not a host in your ssh config"
+fi
+
+if [ "$LOCAL_ONLY" = "1" ]; then
+  head_ "Server"
+  echo "  skipped (--local)"
+else
+  if desk_master_up; then
+    ok "SSH master is up"
+  else
+    warn "SSH master is down (desk brings it up on its own)"
+    [ -n "$DESK_CONNECT_CMD" ] && fix "it will run DESK_CONNECT_CMD" \
+                               || fix "it will run a plain ssh -fNM"
+  fi
+fi
+
+# ─── the server ──────────────────────────────────────────────────────────────
+if [ "$LOCAL_ONLY" != "1" ]; then
+head_ "Server"
+
+if ! desk_master_up && ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$DESK_HOST" true 2>/dev/null; then
+  bad "cannot reach $DESK_HOST over ssh, so the server cannot be checked"
+  fix "bring the connection up first, then run desk-doctor again"
+else
+  # One round trip for everything. Each line is "STATUS<tab>message", parsed
+  # below, because twenty separate ssh calls take twenty round trips.
+  REMOTE="$(desk_ssh "MIN='$DESK_DISPLAY_MIN' ADDR='$DESK_RDP_ADDR' PORT='$DESK_RDP_PORT' bash -s" 2>/dev/null <<'REMOTE_CHECKS'
+p() { printf '%s\t%s\n' "$1" "$2"; }
+me="$(id -un)"
+
+# xrdp itself
+if systemctl is-active --quiet xrdp 2>/dev/null; then p ok "xrdp is running"
+else p bad "xrdp is not running (sudo systemctl start xrdp)"; fi
+
+if systemctl is-active --quiet xrdp-sesman 2>/dev/null; then p ok "xrdp-sesman is running"
+else p bad "xrdp-sesman is not running"; fi
+
+# The listener. Ubuntu's default is 0.0.0.0:3389, which on a box with no
+# firewall means the desktop is exposed to the internet.
+listen="$(ss -ltn 2>/dev/null | awk '{print $4}' | grep -c "^${ADDR}:${PORT}$")"
+if [ "${listen:-0}" -ge 1 ]; then p ok "xrdp is listening on ${ADDR}:${PORT}"
+else
+  if ss -ltn 2>/dev/null | awk '{print $4}' | grep -q ':3389$'; then
+    p bad "xrdp is on the default 0.0.0.0:3389, not ${ADDR}:${PORT} (it is exposed)"
+  else
+    p bad "nothing is listening on ${ADDR}:${PORT}"
+  fi
+fi
+
+# The single most common cause of early failures: Ubuntu ships the xrdp user
+# outside the ssl-cert group, so it cannot read its own TLS key.
+if sudo -n -u xrdp test -r /etc/xrdp/key.pem 2>/dev/null; then
+  p ok "the xrdp user can read its TLS key"
+elif id -nG xrdp 2>/dev/null | tr ' ' '\n' | grep -qx ssl-cert; then
+  p ok "the xrdp user is in the ssl-cert group"
+else
+  p bad "the xrdp user is NOT in ssl-cert, so TLS connections fail (usermod -aG ssl-cert xrdp)"
+fi
+
+# Session policy. UBI reuses a session for the same user, depth and client IP.
+grep -qs '^Policy=UBI' /etc/xrdp/sesman.ini \
+  && p ok "sesman Policy=UBI, so reconnecting returns to the same session" \
+  || p warn "sesman Policy is not UBI, so a reconnect may start a second session"
+
+off="$(awk -F= '/^X11DisplayOffset/{print $2}' /etc/xrdp/sesman.ini 2>/dev/null | tr -d ' ')"
+if [ -n "$off" ] && [ "$off" -ge "$MIN" ] 2>/dev/null; then
+  p ok "X11DisplayOffset=$off, clear of the other tenants"
+else
+  p warn "X11DisplayOffset is '${off:-unset}' but DESK_DISPLAY_MIN is $MIN"
+fi
+
+# The orphan reaper.
+[ -x /usr/local/sbin/xrdp-reap-orphans ] \
+  && p ok "the orphan reaper is installed" \
+  || p warn "no orphan reaper, so a sesman restart will strand your session"
+
+# Tools the bridge and the layout push need on the far side.
+command -v xclip >/dev/null 2>&1 \
+  && p ok "xclip present (the clipboard bridge needs it)" \
+  || p bad "xclip is missing, so text cannot cross (sudo apt install xclip)"
+command -v setxkbmap >/dev/null 2>&1 \
+  && p ok "setxkbmap present" \
+  || p bad "setxkbmap is missing, so the keyboard layout cannot be set"
+command -v xmodmap >/dev/null 2>&1 \
+  && p ok "xmodmap present" \
+  || p warn "xmodmap is missing, so the Fn fallback route is unavailable"
+command -v python3 >/dev/null 2>&1 \
+  && p ok "python3 present" \
+  || p bad "python3 is missing, so the clipboard agent cannot run"
+
+# Orphaned sessions: an X server older than the sesman that is meant to track
+# it. This is the ERRINFO_LOGOFF_BY_USER failure, and it is invisible otherwise.
+sesman_started=$(date -d "$(systemctl show xrdp-sesman -p ActiveEnterTimestamp --value)" +%s 2>/dev/null || echo 0)
+orphans=0 live=0
+for pid in $(pgrep -u "$me" -x Xorg 2>/dev/null); do
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'xrdp/xorg.conf' || continue
+  live=$((live+1))
+  started=$(date -d "$(ps -o lstart= -p "$pid")" +%s 2>/dev/null || echo 0)
+  [ "$sesman_started" -gt 0 ] && [ "$started" -gt 0 ] && [ "$started" -lt "$sesman_started" ] \
+    && orphans=$((orphans+1))
+done
+if [ "$orphans" -gt 0 ]; then
+  p bad "$orphans session(s) predate sesman and are orphaned; every connect will die at once"
+elif [ "$live" -gt 0 ]; then
+  p ok "$live live session(s), all tracked by the current sesman"
+else
+  p ok "no session running yet (desk will start one)"
+fi
+
+# Which display, and is it ours. Other tenants running Xvfb with -ac have
+# access control off, so attaching to one means opening on a stranger's screen.
+found=""
+for pid in $(pgrep -u "$me" -x Xorg 2>/dev/null); do
+  cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" || continue
+  case "$cmd" in *xrdp/xorg.conf*) ;; *) continue ;; esac
+  for tok in $cmd; do case "$tok" in :[0-9]*) found="${tok#:}"; break ;; esac; done
+  [ -n "$found" ] && break
+done
+if [ -n "$found" ]; then
+  if [ "$found" -lt "$MIN" ]; then
+    p bad "the session is on :$found, below the floor of :$MIN"
+  elif [ "$(stat -c %U "/tmp/.X11-unix/X$found" 2>/dev/null)" != "$me" ]; then
+    p bad "display :$found is not owned by $me; refusing to touch it"
+  else
+    p ok "session display is :$found, owned by $me"
+  fi
+fi
+
+# Foreign displays, for context only.
+foreign=0
+for s in /tmp/.X11-unix/X*; do
+  [ -S "$s" ] || continue
+  [ "$(stat -c %U "$s" 2>/dev/null)" = "$me" ] || foreign=$((foreign+1))
+done
+[ "$foreign" -gt 0 ] && p note "$foreign X display(s) belong to other users on this box"
+REMOTE_CHECKS
+)"
+
+  if [ -z "$REMOTE" ]; then
+    bad "the server checks returned nothing"
+  else
+    while IFS="$(printf '\t')" read -r status message; do
+      [ -n "$message" ] || continue
+      case "$status" in
+        ok)   ok   "$message" ;;
+        warn) warn "$message" ;;
+        note) printf '  note  %s\n' "$message" ;;
+        *)    bad  "$message" ;;
+      esac
+    done <<< "$REMOTE"
+  fi
+fi
+fi
+
+# ─── verdict ─────────────────────────────────────────────────────────────────
+echo
+printf '%d ok, %d warnings, %d failures\n' "$PASS" "$WARN" "$FAIL"
+if [ "$FAIL" -gt 0 ]; then
+  echo "Fix the failures above, then run desk."
+  exit 1
+fi
+[ "$WARN" -gt 0 ] && echo "Warnings are things that work but are worse than they could be."
+echo "Ready. Run: desk"
+exit 0
