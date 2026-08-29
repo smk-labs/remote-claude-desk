@@ -47,6 +47,9 @@ desk_resolve() {
 # would otherwise fail later with a confusing SSH error.
 desk_load_config() {
   local root="$1" found=""
+  # Where the repo lives, so desk_remote_run can find remote/ no matter which
+  # directory the caller was invoked from or symlinked into.
+  DESK_ROOT="$root"
   for candidate in \
       "$HOME/.config/remote-claude-desk/config.sh" \
       "$root/config.sh"; do
@@ -58,6 +61,17 @@ desk_load_config() {
     desk_warn "    cp $root/config.example.sh $root/config.sh"
     desk_warn "    \$EDITOR $root/config.sh     # set DESK_HOST and DESK_USER"
     exit 1
+  fi
+
+  # This file is SOURCED, so everything in it runs. That is what makes a
+  # per-run override like `DESK_SIZE=... desk` free, and it is also why a
+  # config pasted from an issue thread executes on sight. Refuse one that
+  # anyone else can write to, which is the case that turns a shared machine
+  # into someone else's shell.
+  local perms
+  perms="$(stat -f '%Lp' "$found" 2>/dev/null || stat -c '%a' "$found" 2>/dev/null || echo "")"
+  if [ -n "$perms" ] && [ $(( 8#$perms & 0022 )) -ne 0 ]; then
+    desk_die "$found is writable by group or others (mode $perms). Run: chmod 600 $found"
   fi
 
   # shellcheck disable=SC1090
@@ -83,7 +97,7 @@ desk_load_config() {
     desk_die "$found still has the example values. Set DESK_HOST and DESK_USER."
   fi
 
-  export DESK_HOST DESK_USER DESK_SSH_SOCKET DESK_DISPLAY_MIN DESK_CONFIG_FILE
+  export DESK_HOST DESK_USER DESK_SSH_SOCKET DESK_DISPLAY_MIN DESK_CONFIG_FILE DESK_ROOT
 }
 
 # ─── ssh ─────────────────────────────────────────────────────────────────────
@@ -117,12 +131,8 @@ desk_ensure_master() {
       || desk_die "Could not open an SSH master to $DESK_HOST."
   fi
 
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    desk_master_up && return 0
-    sleep 1
-  done
-  desk_die "SSH master did not come up within 10s."
+  desk_retry 10 1 1 -- desk_master_up \
+    || desk_die "SSH master did not come up within 10s."
 }
 
 # Forward the RDP port and prove something answers on it. A forward that fails
@@ -149,6 +159,75 @@ desk_remote_pkill() {
   desk_ssh "pkill -f '$bracketed'" >/dev/null 2>&1 || true
 }
 
+# ─── running code on the server ──────────────────────────────────────────────
+
+# Run one of the scripts in remote/ on the server.
+#
+#   desk_remote_run find-display.sh MIN=150
+#
+# Everything after the script name is a NAME=VALUE pair placed in the remote
+# environment. Stdout and the exit status are the script's own.
+#
+# This function exists because the remote payloads used to be string literals:
+# heredocs in three files and a Python r-string in a fourth, five call sites
+# with five different shapes. 227 lines, 18% of the code, that `bash -n` and
+# `shellcheck` both skip entirely, because a heredoc is data and no parser
+# looks inside it. A deliberate syntax error in one of them passed both checks.
+#
+# As files they are ordinary code: parsed, linted, highlighted and diffable.
+# The transport, the quoting and the timeout live here instead of being
+# re-derived at every call site.
+desk_remote_run() {
+  local script="$1"; shift
+  local path="$DESK_ROOT/remote/$script"
+  [ -f "$path" ] || { desk_warn "missing remote script: $path"; return 1; }
+
+  # The environment is passed as assignments in front of the interpreter rather
+  # than interpolated into the script, so a value containing a space, a quote or
+  # a dollar sign cannot change what runs.
+  local env_prefix="" pair
+  for pair in "$@"; do
+    env_prefix+="$(printf '%q' "${pair%%=*}")=$(printf '%q' "${pair#*=}") "
+  done
+
+  local interp="bash -s"
+  case "$script" in *.py) interp="python3 -" ;; esac
+
+  desk_ssh "${env_prefix}${interp}" < "$path"
+}
+
+# ─── bounded waiting ─────────────────────────────────────────────────────────
+
+# Retry a command until it passes, with a ceiling. Never waits forever.
+#
+#   desk_retry 12 2 3 -- some_command args
+#            tries ^  ^ delay
+#                     ^ how many CONSECUTIVE passes count as success
+#
+# "Every wait gets a ceiling" was previously obeyed six different ways, each one
+# correct and none of them enforced. The seventh loop someone writes is correct
+# only if they remember, and the failure mode of forgetting is the worst one
+# here: waiting forever with nothing on screen.
+#
+# The consecutive count is not padding. The keyboard layout genuinely needs
+# three passes in a row, because xrdp overwrites the keymap after the first one
+# lands, so a single success is not proof.
+desk_retry() {
+  local tries="$1" delay="$2" need="$3"; shift 3
+  [ "${1:-}" = "--" ] && shift
+  local i ok=0
+  for ((i = 0; i < tries; i++)); do
+    sleep "$delay"
+    if "$@"; then
+      ok=$((ok + 1))
+      [ "$ok" -ge "$need" ] && return 0
+    else
+      ok=0
+    fi
+  done
+  return 1
+}
+
 # ─── which display ───────────────────────────────────────────────────────────
 
 # Ask the server which X display this session is actually on.
@@ -159,56 +238,14 @@ desk_remote_pkill() {
 # layout is pushed at nothing and the clipboard bridge owns a selection nobody
 # reads. Both fail silently, which is the worst way for them to fail.
 #
-# Two independent guards, because this box is shared with other tenants who run
-# Xvfb with -ac and therefore have access control off: the display number must
-# be at or above DESK_DISPLAY_MIN, and its socket must be owned by us. A display
-# that fails either test is not ours to touch.
+# The guards live in remote/find-display.sh, next to the code they guard.
 desk_remote_display() {
   if [ -n "${DESK_DISPLAY:-}" ]; then
     printf '%s\n' "$DESK_DISPLAY"
     return 0
   fi
-
   local found
-  found="$(desk_ssh "MIN='$DESK_DISPLAY_MIN' bash -s" 2>/dev/null <<'REMOTE'
-me="$(id -un)"
-
-# Candidates: the display number on the command line of every xrdp X server
-# this user owns. xrdp's Xorg is told ":N ... -config xrdp/xorg.conf", and the
-# other tenants run Xvfb, so that config path is what separates ours from
-# theirs.
-candidates=""
-for p in $(pgrep -u "$me" -x Xorg 2>/dev/null); do
-  cmd="$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null)" || continue
-  case "$cmd" in *xrdp/xorg.conf*) ;; *) continue ;; esac
-  for tok in $cmd; do
-    case "$tok" in
-      :[0-9]*) candidates="$candidates ${tok#:}"; break ;;
-    esac
-  done
-done
-
-# Fallback: any X socket we own. Covers a session whose Xorg is named
-# differently, and costs nothing when the loop above already found it.
-if [ -z "$candidates" ]; then
-  for s in /tmp/.X11-unix/X*; do
-    [ -S "$s" ] || continue
-    [ "$(stat -c %U "$s" 2>/dev/null)" = "$me" ] || continue
-    candidates="$candidates ${s##*/X}"
-  done
-fi
-
-for n in $(printf '%s\n' $candidates | sort -n -u); do
-  case "$n" in ''|*[!0-9]*) continue ;; esac
-  [ "$n" -ge "$MIN" ] || continue
-  [ "$(stat -c %U "/tmp/.X11-unix/X$n" 2>/dev/null)" = "$me" ] || continue
-  printf ':%s\n' "$n"
-  exit 0
-done
-exit 1
-REMOTE
-)"
-
+  found="$(desk_remote_run find-display.sh "MIN=$DESK_DISPLAY_MIN" 2>/dev/null)" || return 1
   [ -n "$found" ] || return 1
   printf '%s\n' "$found"
 }

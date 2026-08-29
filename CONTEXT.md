@@ -20,6 +20,12 @@ having similar names and completely different lifetimes.
 - **The bridge** is `desk-clip`, a pair of processes (one on each machine) that
   carries text between the two clipboards over the master. It exists because the
   RDP clipboard channel drops anything that is not ASCII.
+- **A remote script** is a file in `remote/` that runs on the server, not on
+  the Mac. There are five: find the display, heal an orphan, push the layout,
+  run the server checks, and the clipboard agent. They reach the server one way
+  only, through `desk_remote_run`, which sends the file over the master and
+  passes values as environment assignments in front of the interpreter. They
+  used to be text inside the commands, where no parser could read them.
 - **An orphan** is a session whose `xrdp-sesman` was restarted underneath it.
   The desktop keeps running but nothing tracks it any more, and every later
   connect makes a new session that dies at once.
@@ -39,15 +45,24 @@ thing whose lifetime you guessed wrong.
 
 ## Where a setting belongs
 
-Three homes, and putting a value in the wrong one is the usual mistake.
+Four homes, and putting a value in the wrong one is the usual mistake.
 
 - **`config.sh`** for anything true of the machine: host, user, ports, the
   display floor, the keyboard layouts. Read once at startup by every command.
+  It is sourced, so everything in it runs, and `desk_load_config` refuses a copy
+  that group or others can write to.
 - **An environment variable** for anything true of one run only: `DESK_SIZE`,
   `DESK_BPP`, `DESK_FULL`. Listed in `desk --help`.
-- **`lib/common.sh`** for behaviour, never for values. If two commands need the
-  same logic, it goes here, and it goes here as a function so no caller can
+- **`lib/`** for behaviour, never for values, and split by kind. `common.sh`
+  does things: load the config, hold the SSH master, retry with a ceiling, kill
+  safely on the far side. `freerdp-args.sh` decides one thing, the client's
+  argv, and touches no network, which is what lets `test/run` check it. If two
+  commands need the same logic it goes here as a function, so no caller can
   forget the part that bites.
+- **`remote/`** for anything that executes on the server. A remote script reads
+  its input from the environment and never has values pasted into it. Nothing
+  else may run code on the far side, and `test/test-remote-scripts.sh` fails if
+  a payload is embedded in a command again.
 
 ## The rule behind most of the code
 
@@ -58,4 +73,5 @@ crossing, a layout pushed at a display that was not there, a bridge that never
 started. All of them looked like a working desktop.
 
 So: bound every wait, name every failure, and prefer a check that says "this is
-off" over a default that quietly does nothing.
+off" over a default that quietly does nothing. Keep code where a parser can read
+it too, because a script hidden in a string is the same silence one level down.

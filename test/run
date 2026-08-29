@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Run every check in this directory. No server, no Keychain, no window.
+#
+#   test/run
+#
+# That it needs none of those is the point. Before lib/freerdp-args.sh existed,
+# the flags were decided in the middle of the connect flow, so the question
+# "does DESK_BPP=16 really produce /bpp:16" could only be answered by connecting
+# and looking at a window. These flags carry the most hard-won knowledge in the
+# project, and they were the least verifiable thing in it.
+set -uo pipefail
+
+ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
+export ROOT
+
+PASS=0 FAIL=0
+export PASS FAIL
+
+# Shared by the test files. Kept tiny on purpose: a test harness that needs its
+# own documentation is a second thing to maintain.
+ok()   { printf '  ok    %s\n' "$*"; PASS=$((PASS + 1)); }
+bad()  { printf '  FAIL  %s\n' "$*"; FAIL=$((FAIL + 1)); }
+is()   { # is <actual> <expected> <description>
+  if [ "$1" = "$2" ]; then ok "$3"
+  else bad "$3"; printf '        expected: %s\n        actual:   %s\n' "$2" "$1"; fi
+}
+contains() { # contains <haystack> <needle> <description>
+  case "$1" in *"$2"*) ok "$3" ;; *) bad "$3 (missing: $2)" ;; esac
+}
+lacks() { # lacks <haystack> <needle> <description>
+  case "$1" in *"$2"*) bad "$3 (unexpectedly present: $2)" ;; *) ok "$3" ;; esac
+}
+export -f ok bad is contains lacks
+
+for f in "$ROOT"/test/test-*.sh; do
+  printf '\n%s\n' "$(basename "$f")"
+  # Each file runs in this shell so the counters accumulate.
+  # shellcheck disable=SC1090
+  . "$f"
+done
+
+printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+[ "$FAIL" -eq 0 ] || exit 1

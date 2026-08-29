@@ -111,19 +111,42 @@ Neither is required. `desk` does not know or care whether either is installed.
 
 ## How it is laid out
 
-One config file, one shared library, and five small commands. Everything that
-used to be copied into four scripts now lives in exactly one place.
+One config file, five small commands, and two kinds of shared code: what runs
+on the Mac, and what runs on the server.
 
 ```
-config.example.sh   the only file you edit
-lib/common.sh       config, SSH, display discovery, safe remote kill
-bin/                desk, desk-clip, desk-doctor, desk-setup, desk-tunnel
-mac/                install.sh, Karabiner rules, FreeRDP shortcut override
-server/             install.sh, the orphan reaper, the listener lock, the
-                    isolated Claude Desktop launcher
-bar/                optional macOS menu bar app
-docs/               why each setting is what it is, and how it was measured
+config.example.sh     the only file you edit
+lib/common.sh         config, SSH, display discovery, safe remote kill, retry
+lib/freerdp-args.sh   the FreeRDP command line, built from config alone
+bin/                  desk, desk-clip, desk-doctor, desk-setup, desk-tunnel
+remote/               the five scripts that run on the server
+test/                 run, plus the checks it runs
+mac/                  install.sh, Karabiner rules, FreeRDP shortcut override
+server/               install.sh, the orphan reaper, the listener lock, the
+                      isolated Claude Desktop launcher
+bar/                  optional macOS menu bar app
+docs/                 why each setting is what it is, and how it was measured
 ```
+
+- `remote/` holds every line that executes on the server. One function,
+  `desk_remote_run` in `lib/common.sh`, sends a script over the SSH master and
+  runs it there. Those scripts used to be text inside the commands, where no
+  parser ever read them (see [docs/lessons.md](docs/lessons.md), trap 8)
+- `lib/` splits by kind. `common.sh` does things: load config, hold the master,
+  retry with a ceiling, kill safely on the far side. `freerdp-args.sh` decides
+  one thing and touches no network, which is what makes the flags testable
+
+### Before you send a change
+
+Run the tests first. They need a Mac and nothing else.
+
+```bash
+test/run
+```
+
+- 49 checks in about a second. No server, no SSH, no password, no window
+- they cover the FreeRDP flags, the shared library, and that every script in
+  `remote/` still parses and is shellcheck clean
 
 ## Requirements
 

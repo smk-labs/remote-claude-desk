@@ -161,6 +161,33 @@ Disconnect first, every time.
 - fixed in two places: a reaper as `ExecStartPre` on sesman, and a preflight in
   `desk` that kills any xrdp Xorg older than sesman
 
+## Trap 8: code inside a string is code nothing checks
+
+Both linters were clean, and had been for months. They were reading past a fifth
+of the code without saying so.
+
+- 227 of the 1273 lines ran on the server, and every one of them lived inside a
+  string: heredocs in three commands and a Python r-string in a fourth. Five
+  call sites, five different transport shapes
+- a heredoc is data, so no parser looks inside it. A deliberate hard syntax
+  error was put in one of them, and `bash -n` and `shellcheck -x` both returned
+  zero findings
+- the same line in an ordinary file failed at once. That is the whole result:
+  the checks were not weak, they were never pointed at the code
+- the quoting made it worse. Inside two levels of quotes, `$HOME`, a loop
+  variable and the closing `$` of a grep pattern each needed a backslash to
+  survive, so the text on screen was not the text that ran
+- those payloads are files now: `remote/find-display.sh`,
+  `remote/heal-orphans.sh`, `remote/apply-layout.sh`, `remote/check.sh` and
+  `remote/clip-agent.py`. One function, `desk_remote_run`, ships and runs all
+  five
+- values reach them as environment assignments in front of the interpreter, not
+  pasted into the text, so a quote or a dollar sign in a value cannot change
+  what runs
+- going back now costs a red test. `test/test-remote-scripts.sh` parses every
+  file in `remote/`, runs shellcheck over the shell ones where it is installed,
+  and fails if any command re-embeds a payload as a string literal
+
 ## Three more mistakes worth not repeating
 
 Each of these looked like a different bug than it was.
@@ -191,12 +218,28 @@ remembered.
 - `PB_ENV` in `bin/desk-clip` pins the locale on every pasteboard call (trap 2)
 - `MAX_BYTES` in `bin/desk-clip` is a 2 MB ceiling that turns a runaway loop
   into a skipped item (trap 3)
-- bounded retry loops everywhere: 12 layout tries, 15 display tries, a 20 second
-  agent start timeout, 10 consecutive bridge failures before it gives up loudly
+- `desk_remote_run` in `lib/common.sh` is the only way code reaches the server.
+  Every payload is a file in `remote/`, parsed and linted like the rest, and its
+  input is passed as environment assignments rather than pasted in (trap 8)
+- `desk_retry` in `lib/common.sh` is the one bounded loop, and it replaced six
+  hand-written ones that were each correct and none of them enforced. Callers
+  say how many tries, how long apart, and how many passes in a row count:
+  12 tries for the layout and three in a row, 15 tries for the display.
+  `bin/desk-clip` keeps its own loops, because it is Python, and its ceilings
+  are a 20 second agent start and 10 consecutive failures before it says so
 - `desk_ssh` sets `ConnectTimeout=10` on every remote call, so no call hangs
+- `desk_build_args` in `lib/freerdp-args.sh` is pure, so the flags that carry
+  the most hard-won knowledge here are finally checkable. `test/run` asserts
+  them, including the rule that broke the screen: never 24-bit colour
 - the preflight in `bin/desk` and the reaper on the server both handle the
   orphaned session (trap 7)
-- `bin/desk-doctor` checks all of it in one pass and names the cause
+- `bin/desk-doctor` checks all of it in one pass and names the cause. A remedy
+  is a `fix` line now, on both sides of the connection: `remote/check.sh` sends
+  one `STATUS<tab>TEXT` line per result, so a hint on the server prints the same
+  way as a hint on the Mac instead of hiding in brackets inside a message
+- `desk_load_config` refuses a `config.sh` that group or others can write to.
+  The file is sourced, so everything in it runs, which on a shared box makes a
+  writable config someone else's shell
 
 ## What is not verified
 

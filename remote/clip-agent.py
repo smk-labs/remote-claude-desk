@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Clipboard agent. Runs on the server, driven by desk-clip over the SSH master.
+
+Reads "SET <b64>" lines on stdin, owns the X CLIPBOARD selection through xclip,
+and prints "CLIP <b64>" when something else in the session copies. It never
+echoes back a value it set itself, which is what stops the ping-pong.
+
+argv[1] is the X display to attach to.
+"""
+import base64, os, subprocess, sys, threading, time
+DISP = sys.argv[1]
+ENV  = dict(os.environ, DISPLAY=DISP, XAUTHORITY=os.path.expanduser("~/.Xauthority"))
+owner = [None]      # the live `xclip -i` process
+mine  = [None]      # the value we last SET, cleared the first time the poll
+                    # sees it. ONE shot, not a history: a remembered list meant
+                    # that when the session copied text the Mac had held
+                    # earlier, it was mistaken for our own echo and never
+                    # reached the Mac at all.
+quiet = [0.0]       # ignore polls for a moment after a SET, so a read that
+                    # lands before xclip owns the selection cannot report the
+                    # previous value as if someone had just copied it.
+
+def set_clip(data):
+    if owner[0] and owner[0].poll() is None:
+        owner[0].terminate()
+        try: owner[0].wait(timeout=2)
+        except Exception: owner[0].kill()
+    mine[0]  = data
+    quiet[0] = time.time() + 0.8
+    owner[0] = subprocess.Popen(["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-i"],
+                                stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, env=ENV)
+    owner[0].stdin.write(data); owner[0].stdin.close()
+
+def reader():
+    for line in sys.stdin:
+        line = line.strip()
+        if line.startswith("SET "):
+            try: set_clip(base64.b64decode(line[4:]))
+            except Exception as e: sys.stderr.write("agent set: %r\n" % (e,))
+        elif line == "BYE":
+            os._exit(0)
+    os._exit(0)     # stdin closed: the Mac side is gone, so go with it rather
+                    # than sitting on the X selection forever.
+
+threading.Thread(target=reader, daemon=True).start()
+sys.stdout.write("READY\n"); sys.stdout.flush()
+last = None
+while True:
+    time.sleep(0.4)
+    if time.time() < quiet[0]:
+        continue
+    try:
+        p = subprocess.run(["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-o"], env=ENV,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        cur = p.stdout if p.returncode == 0 else b""
+    except Exception:
+        continue
+    if not cur or cur == last:
+        continue
+    if cur == mine[0]:      # our own echo, once
+        mine[0] = None
+        last = cur
+        continue
+    last = cur
+    sys.stdout.write("CLIP " + base64.b64encode(cur).decode() + "\n")
+    sys.stdout.flush()
