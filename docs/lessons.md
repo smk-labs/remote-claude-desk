@@ -163,8 +163,8 @@ Disconnect first, every time.
 
 ## Trap 8: code inside a string is code nothing checks
 
-Both linters were clean, and had been for months. They were reading past a fifth
-of the code without saying so.
+Both checkers were clean, and had been for months. They were reading past a
+fifth of the code without saying so.
 
 - 227 of the 1273 lines ran on the server, and every one of them lived inside a
   string: heredocs in three commands and a Python r-string in a fourth. Five
