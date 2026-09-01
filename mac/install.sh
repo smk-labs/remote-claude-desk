@@ -36,7 +36,7 @@ fi
 # ---------------------------------------------------------------------------
 
 BIN_DIR="$HOME/bin"
-BIN_LINKS="desk desk-doctor desk-tunnel"
+BIN_LINKS="desk desk-doctor desk-setup desk-tunnel"
 FREERDP_DIR="$HOME/.config/freerdp"
 FREERDP_FILE="$FREERDP_DIR/sdl-freerdp.json"
 KARABINER_DIR="$HOME/.config/karabiner/assets/complex_modifications"

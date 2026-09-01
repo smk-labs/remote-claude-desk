@@ -70,6 +70,23 @@ if [ "${1:-}" = "--stop" ]; then
   exit 0
 fi
 
+# desk --restart is the big red button: tear everything of ours down, including
+# the SSH master and the helpers, and come back up from nothing.
+#
+# Plain `desk` already closes a previous client and reconnects through a blip on
+# its own, so this is not the normal path. It is here for the state no automatic
+# rule catches, when you would otherwise be hunting processes by hand.
+if [ "${1:-}" = "--restart" ]; then
+  desk_say "restarting from scratch."
+  pkill -f "[s]dl-freerdp /v:127.0.0.1:${DESK_LOCAL_PORT}" 2>/dev/null
+  pkill -f "[d]esk-clip" 2>/dev/null
+  ssh -S "$DESK_SSH_SOCKET" -O exit "$DESK_HOST" 2>/dev/null
+  # The remote half too, so a stale bridge is not left owning the clipboard.
+  desk_remote_pkill "deskclip-agent" 2>/dev/null || true
+  sleep 2
+  shift
+fi
+
 # The log entry is opened BEFORE anything can fail, not after the client starts.
 # It used to be written just above run_client, so every failure that happened
 # earlier - a dead master, a tunnel that would not answer - left the log
@@ -242,13 +259,62 @@ run_client() {
   return "$rc"
 }
 
-session_helper &
-HELPERS+=($!)
+# ─── survive a blip instead of dying with it ─────────────────────────────────
+# The SSH master drops every hour or two: a wifi handoff, the proxy rotating a
+# node, the laptop dozing. FreeRDP loses its TCP, prints "Network disconnect!",
+# and `desk` used to exit with it. The session on the server was untouched the
+# whole time, so the desktop was still there and simply nobody was showing it.
+# You came back to a dead window for a fault that had already healed itself.
+#
+# So reconnect. The hard part is telling a drop apart from you closing the
+# window, and the honest signal is not the exit code, which is 131 either way.
+# It is the state left behind: after a drop the tunnel is gone, after a close
+# everything is still healthy. So we ask, rather than guess.
+#
+# Bounded, because a laptop that reconnects forever in the background is worse
+# than one that stops: 6 attempts, 20 seconds apart, so about two minutes.
+RECONNECT_TRIES="${DESK_RECONNECT_TRIES:-6}"
+attempt=0
 
-run_client
-rc=$?
-cleanup
-echo "exit=$rc" >> "$LOG"
+while :; do
+  session_helper &
+  HELPERS+=($!)
+
+  run_client
+  rc=$?
+  cleanup
+  echo "exit=$rc" >> "$LOG"
+
+  [ "$rc" -eq 0 ] && break
+
+  # Healthy tunnel means the connection was not what ended: you closed the
+  # window. Leave, and leave quietly.
+  if nc -z -G 3 127.0.0.1 "$DESK_LOCAL_PORT" 2>/dev/null; then
+    break
+  fi
+
+  attempt=$((attempt + 1))
+  if [ "$attempt" -gt "$RECONNECT_TRIES" ]; then
+    desk_warn "the connection dropped and did not come back after $RECONNECT_TRIES tries."
+    break
+  fi
+
+  desk_say "connection dropped, reconnecting ($attempt/$RECONNECT_TRIES)..."
+  sleep 20
+
+  # Rebuild both halves. Either can be the one that died, and desk_ensure_master
+  # is already a no-op when the master is fine.
+  #
+  # In a SUBSHELL, because both of these call desk_die on failure. Dying is the
+  # right answer at startup and the wrong one here: a login that fails on try
+  # two is exactly what try three is for. The subshell contains the exit, and
+  # the tunnel check below decides whether it actually worked.
+  ( desk_ensure_master && desk_forward ) >/dev/null 2>&1
+  if ! nc -z -G 3 127.0.0.1 "$DESK_LOCAL_PORT" 2>/dev/null; then
+    desk_say "  tunnel still down, will try again."
+    continue
+  fi
+done
 
 if [ "$rc" -ne 0 ]; then
   echo

@@ -50,6 +50,18 @@ Each row is one fix in this repo, and
 [docs/troubleshooting.md](docs/troubleshooting.md) is the symptom-first version
 of the same table.
 
+## When it will not come up
+
+`desk` closes a previous client and reconnects through a dropped tunnel on its
+own. When you want to force the issue anyway:
+
+```bash
+desk --restart
+```
+
+That tears down the client, the helpers and the SSH master, then starts clean.
+There is a clickable **Restart Desk** app in `~/Applications` that runs it.
+
 ## Quick start
 
 Three commands on the Mac, one on the server.

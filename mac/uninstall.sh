@@ -19,7 +19,7 @@ else
 fi
 
 BIN_DIR="$HOME/bin"
-BIN_LINKS="desk desk-doctor desk-tunnel"
+BIN_LINKS="desk desk-doctor desk-setup desk-tunnel"
 FREERDP_FILE="$HOME/.config/freerdp/sdl-freerdp.json"
 KARABINER_FILE="$HOME/.config/karabiner/assets/complex_modifications/remote-claude-desk.json"
 
