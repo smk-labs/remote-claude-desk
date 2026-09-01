@@ -147,10 +147,12 @@ desk_reach_report() {
   desk_warn "  That means the packets are being swallowed on the way, not refused."
   case "$iface" in
     utun*|ipsec*|tun*|tap*|ppp*)
-      desk_warn "  Traffic to $addr is routed over $iface (gateway $gw), which is a VPN"
-      desk_warn "  or proxy tunnel, not your normal connection. That tunnel is the cause."
-      desk_warn "  Fix: turn the VPN or proxy client off, or add $addr to its direct/bypass"
-      desk_warn "  list so the server is reached over the ordinary route."
+      desk_warn "  Traffic to $addr goes over $iface (gateway $gw), a VPN or proxy tunnel."
+      desk_warn "  The tunnel is carrying the packets but they are not arriving, so the"
+      desk_warn "  exit node cannot reach this server. Try another node before anything else."
+      desk_warn "  Do NOT assume the tunnel is at fault and bypass it: if the server is only"
+      desk_warn "  reachable through the tunnel, bypassing it makes the address disappear"
+      desk_warn "  entirely. Check with:  traceroute -n $addr"
       ;;
     *)
       desk_warn "  Route to $addr goes over ${iface:-an unknown interface} (gateway ${gw:-unknown})."
