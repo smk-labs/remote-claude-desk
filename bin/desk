@@ -70,6 +70,14 @@ if [ "${1:-}" = "--stop" ]; then
   exit 0
 fi
 
+# The log entry is opened BEFORE anything can fail, not after the client starts.
+# It used to be written just above run_client, so every failure that happened
+# earlier - a dead master, a tunnel that would not answer - left the log
+# untouched and looking a day old. That is the exact moment the log matters most.
+{ echo; echo "===== $(date) ====="; } >> "$LOG"
+desk_log() { echo "$*" >> "$LOG"; }
+
+desk_log "master: bringing up"
 desk_ensure_master
 
 # ─── preflight: heal an orphaned session before it kills the connection ──────
@@ -80,6 +88,7 @@ desk_ensure_master
 # Best effort: a server that cannot be healed is still worth trying to reach.
 desk_remote_run heal-orphans.sh >/dev/null 2>&1 || true
 
+desk_log "forward: ${DESK_LOCAL_PORT} -> ${DESK_RDP_ADDR}:${DESK_RDP_PORT}"
 desk_forward
 
 # ─── the connection flags ────────────────────────────────────────────────────
@@ -98,7 +107,7 @@ ARGS=( "${DESK_ARGS[@]}" )
 export SDL_VIDEO_MAC_FULLSCREEN_SPACES="${DESK_SPACES:-1}"
 
 desk_say "log: $LOG"
-{ echo; echo "===== $(date) ====="; echo "args: ${ARGS[*]}"; } >> "$LOG"
+desk_log "args: ${ARGS[*]}"
 
 # ─── helpers that live exactly as long as the client ─────────────────────────
 HELPERS=()

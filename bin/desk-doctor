@@ -162,7 +162,11 @@ head_ "Server"
 
 if ! desk_master_up && ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$DESK_HOST" true 2>/dev/null; then
   bad "cannot reach $DESK_HOST over ssh, so the server cannot be checked"
-  fix "bring the connection up first, then run desk-doctor again"
+  # Not just "bring it up": desk_reach_report separates a box that is off from a
+  # VPN swallowing the route from a login that is being refused. Those three
+  # have nothing in common as fixes.
+  desk_reach_report
+  fix "fix the cause named above, then run desk-doctor again"
 else
   # One round trip for everything, in remote/check.sh. Each line it prints is
   # "STATUS<tab>TEXT", and the loop below turns those back into the same four

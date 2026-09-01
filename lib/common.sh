@@ -109,6 +109,56 @@ desk_ssh() {
   ssh -o ConnectTimeout=10 -o BatchMode=yes -S "$DESK_SSH_SOCKET" "$DESK_HOST" "$@"
 }
 
+# Say WHY the box cannot be reached, instead of "could not open an SSH master".
+#
+# The three failures below look identical from the outside and have nothing in
+# common as fixes, which is the whole reason this exists. The one that cost a
+# morning twice is the middle one: a VPN or proxy client installs a route for
+# the server's address, TCP still connects because the tunnel accepts it
+# locally, and sshd never gets the packet. Ping is fast, the port is "open",
+# and every reconnect dies at the banner with no explanation. Naming the
+# interface that owns the route is what turns that into a one-line answer.
+#
+# Bounded on purpose: 5s for the TCP probe, 8s for the banner. A diagnosis that
+# hangs is worse than no diagnosis.
+desk_reach_report() {
+  local addr port iface gw
+  addr="$(ssh -G "$DESK_HOST" 2>/dev/null | awk '/^hostname /{print $2; exit}')"
+  port="$(ssh -G "$DESK_HOST" 2>/dev/null | awk '/^port /{print $2; exit}')"
+  [ -n "$addr" ] || { desk_warn "  '$DESK_HOST' is not a host in your ssh config."; return; }
+  [ -n "$port" ] || port=22
+
+  if ! nc -z -G 5 "$addr" "$port" 2>/dev/null; then
+    desk_warn "  Nothing is accepting TCP on $addr:$port."
+    desk_warn "  The box is off, or the network between here and it is down."
+    return
+  fi
+
+  # TCP is up. Does sshd actually answer? A real sshd sends "SSH-2.0-..." at once.
+  if printf '' | nc -G 8 -w 8 "$addr" "$port" 2>/dev/null | head -c 4 | grep -q '^SSH-'; then
+    desk_warn "  sshd on $addr:$port answers, so this is a login failure, not the network."
+    desk_warn "  Check your key, your 2FA helper, or DESK_CONNECT_CMD in $DESK_CONFIG_FILE."
+    return
+  fi
+
+  iface="$(route -n get "$addr" 2>/dev/null | awk '/interface:/{print $2; exit}')"
+  gw="$(route -n get "$addr" 2>/dev/null | awk '/gateway:/{print $2; exit}')"
+  desk_warn "  TCP to $addr:$port connects, but sshd never sends its banner."
+  desk_warn "  That means the packets are being swallowed on the way, not refused."
+  case "$iface" in
+    utun*|ipsec*|tun*|tap*|ppp*)
+      desk_warn "  Traffic to $addr is routed over $iface (gateway $gw), which is a VPN"
+      desk_warn "  or proxy tunnel, not your normal connection. That tunnel is the cause."
+      desk_warn "  Fix: turn the VPN or proxy client off, or add $addr to its direct/bypass"
+      desk_warn "  list so the server is reached over the ordinary route."
+      ;;
+    *)
+      desk_warn "  Route to $addr goes over ${iface:-an unknown interface} (gateway ${gw:-unknown})."
+      desk_warn "  Suspect a firewall, or sshd being at MaxStartups and dropping new logins."
+      ;;
+  esac
+}
+
 desk_master_up() {
   ssh -S "$DESK_SSH_SOCKET" -O check "$DESK_HOST" >/dev/null 2>&1
 }
@@ -118,6 +168,14 @@ desk_master_up() {
 # The login dance is the one thing that differs at every site: a plain key here,
 # a TOTP prompt there, a hardware key, a jump host. So the default is the boring
 # one and DESK_CONNECT_CMD is the seam. Two real adapters, not a hypothetical.
+# One exit point for "the master would not come up", so the diagnosis above is
+# printed no matter which of the three ways it failed.
+desk_master_failed() {
+  desk_warn "$*"
+  desk_reach_report
+  exit 1
+}
+
 desk_ensure_master() {
   desk_master_up && return 0
   desk_say "SSH master is down, bringing it up..."
@@ -125,24 +183,41 @@ desk_ensure_master() {
   if [ -n "${DESK_CONNECT_CMD:-}" ]; then
     # Deliberately eval'd: the hook is a command line from the user's own
     # config, and it needs $DESK_SSH_SOCKET and $DESK_HOST expanded inside it.
-    eval "$DESK_CONNECT_CMD" || desk_die "DESK_CONNECT_CMD failed."
+    eval "$DESK_CONNECT_CMD" || desk_master_failed "DESK_CONNECT_CMD failed."
   else
     ssh -fNM -S "$DESK_SSH_SOCKET" "$DESK_HOST" \
-      || desk_die "Could not open an SSH master to $DESK_HOST."
+      || desk_master_failed "Could not open an SSH master to $DESK_HOST."
   fi
 
   desk_retry 10 1 1 -- desk_master_up \
-    || desk_die "SSH master did not come up within 10s."
+    || desk_master_failed "SSH master did not come up within 10s."
 }
 
 # Forward the RDP port and prove something answers on it. A forward that fails
 # is silent by default, and the next thing you see is FreeRDP failing to connect
 # for a reason that looks like the server's fault.
 desk_forward() {
-  ssh -S "$DESK_SSH_SOCKET" -O forward \
-      -L "${DESK_LOCAL_PORT}:${DESK_RDP_ADDR}:${DESK_RDP_PORT}" "$DESK_HOST" 2>/dev/null
-  nc -z -G 3 127.0.0.1 "$DESK_LOCAL_PORT" 2>/dev/null \
-    || desk_die "Tunnel is not answering on 127.0.0.1:${DESK_LOCAL_PORT}."
+  _try_forward() {
+    ssh -S "$DESK_SSH_SOCKET" -O forward \
+        -L "${DESK_LOCAL_PORT}:${DESK_RDP_ADDR}:${DESK_RDP_PORT}" "$DESK_HOST" 2>/dev/null
+    nc -z -G 3 127.0.0.1 "$DESK_LOCAL_PORT" 2>/dev/null
+  }
+
+  _try_forward && return 0
+
+  # A master that survives a network drop keeps answering `-O check` while every
+  # channel through it is already dead, so the forward is accepted and then goes
+  # nowhere. That looked like "desk is broken" for two mornings. Tear the master
+  # down and build a fresh one, once, rather than reporting a failure the user
+  # can only fix by doing exactly this by hand.
+  desk_say "tunnel did not answer, rebuilding the SSH connection..."
+  ssh -S "$DESK_SSH_SOCKET" -O exit "$DESK_HOST" >/dev/null 2>&1 || true
+  desk_ensure_master
+  _try_forward && return 0
+
+  desk_warn "Tunnel is not answering on 127.0.0.1:${DESK_LOCAL_PORT}, even after a rebuild."
+  desk_reach_report
+  exit 1
 }
 
 # Kill a process on the far side by pattern, safely.
