@@ -439,8 +439,25 @@ ENTRY_BODY
     FOUND_PACKAGED=1
     HIDDEN="$DESKTOP_DIR/$(basename "$packaged")"
     TMP_HIDDEN=$(mktemp)
-    grep -v '^NoDisplay=' "$packaged" >"$TMP_HIDDEN" || true
-    printf 'NoDisplay=true\n' >>"$TMP_HIDDEN"
+    # A short stub, not a copy of the packaged file with NoDisplay bolted on.
+    #
+    # The copy carried the packaged Actions across, and a desktop action is a
+    # second Exec line: `Actions=NewChat;NewCode;` with two [Desktop Action]
+    # groups, each starting the NON-isolated binary. Docks and launchers
+    # routinely offer actions from an entry's right-click menu, and several
+    # surface them from searches even when the entry itself is NoDisplay. So the
+    # copy hid the icon and left two live routes to the very thing being hidden.
+    #
+    # The name says what it is, too, because NoDisplay is a request rather than a
+    # guarantee: anything that does show this entry shows it labelled.
+    {
+      printf '[Desktop Entry]\n'
+      printf 'Name=Claude (do not use - not isolated)\n'
+      grep -m1 '^Exec=' "$packaged" || printf 'Exec=claude-desktop %%%%U\n'
+      grep -m1 '^Icon=' "$packaged" || printf 'Icon=claude-desktop\n'
+      printf 'Type=Application\n'
+      printf 'NoDisplay=true\n'
+    } >"$TMP_HIDDEN"
     if cmp -s "$TMP_HIDDEN" "$HIDDEN" 2>/dev/null; then
       skip "packaged entry $(basename "$packaged") is already hidden"
     else

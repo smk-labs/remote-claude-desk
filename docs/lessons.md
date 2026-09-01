@@ -188,6 +188,67 @@ fifth of the code without saying so.
   file in `remote/`, runs shellcheck over the shell ones where it is installed,
   and fails if any command re-embeds a payload as a string literal
 
+## Trap 9: matching somebody else's packaging by a name you guessed
+
+The installer hid `/usr/share/applications/claude-desktop.desktop`. The package
+ships `com.anthropic.Claude.desktop`. So the step printed "no packaged
+claude-desktop.desktop found, nothing to hide", exited zero, and hid nothing.
+
+The failure is not that it did nothing. It is that "the file is not there" and
+"the file is called something else" are the same branch when the match is on a
+guessed filename, so the installer reported a clean skip for a job it had not
+done. The menu then held two Claude entries, the isolated one and one click that
+starts the app against the central `~/.claude`, with nothing on screen saying
+which was which. Isolation that is one click from being bypassed, next to a
+message saying everything is fine.
+
+Match on what a thing DOES, not what it is called. Every entry whose `Exec` line
+invokes the `claude-desktop` binary is now shadowed, so the package renaming its
+file again changes nothing here. Anchor the pattern at the start of the `Exec`
+value and require the binary name to end at a space or end of line, or
+`claude-desktop-isolated` matches the prefix and the installer hides the launcher
+it just wrote.
+
+And the shadow is a written stub, not a copy of the packaged file with
+`NoDisplay=true` appended. A copy brings the packaged `Actions=` across, and each
+desktop action is another `Exec` starting the non-isolated binary; docks offer
+those from a right-click and some launchers surface them from search even when
+the entry itself is NoDisplay. The stub also names itself
+"Claude (do not use - not isolated)", because `NoDisplay` is a request to the
+menu rather than a guarantee, and anything that does show it should show it
+labelled.
+
+## Trap 10: hand-copying a working box instead of running its installer
+
+Setting up a second machine, the units under `~/.config/systemd/user/` were read
+off the working box and written by hand. They were correct, and the box still
+came up missing things, because the units were never the whole of what the
+installer does: `relay-linux install-service` also writes the applications-menu
+entry, removes the competing autostart file, and refreshes the desktop database.
+Copy the output and you get the output. Run the tool and you get everything the
+tool knows.
+
+The visible symptom was "the relay is not in the applications menu", diagnosed
+first as "the relay has no menu entry by design". It has one. The reference box
+had it all along, in `~/.local/share/applications/claude-relay.desktop`, and one
+`ls` of that directory would have said so before any of the reasoning did.
+
+Two smaller versions of the same mistake on the same box:
+
+- `install -d -m 700 -o moe -g moe ~/.config/systemd/user` applies the ownership
+  to the last component only, so `~/.config` stayed root-owned. The user could
+  not create `~/.config/xfce4`, `xfconfd` exited 1 on every D-Bus activation, and
+  the desktop came up as "Unable to load a failsafe session" with a Quit button
+  and nothing else. Nothing in that message mentions permissions.
+- The packages were installed with `--no-install-recommends`, which left out
+  `imagemagick`. The tray's `icons.sh` calls `convert`, printed
+  `convert: command not found`, and **exited zero**, so the icon directory stayed
+  empty and the menu entry pointed at a PNG that was never drawn.
+
+The rule both of these land on: when a working reference exists, read it, and
+diff against it. Not "does the new box work", but "what does the old box have
+that this one does not".
+
 ## Three more mistakes worth not repeating
 
 Each of these looked like a different bug than it was.

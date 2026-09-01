@@ -61,6 +61,16 @@ else
   ok "the pattern leaves the isolated launcher alone"
 fi
 
+# The shadow must be a stub, not a copy. A copied entry brings the packaged
+# Actions with it, and each action is another Exec line starting the
+# non-isolated binary, which docks offer from a right-click and some launchers
+# surface from search even when the entry is NoDisplay. Hiding the icon while
+# leaving two live routes to the thing being hidden is not hiding it.
+lacks "$inst" "grep -v '^NoDisplay=' \"\$packaged\"" \
+      "the shadow entry is written fresh, not copied from the packaged file"
+contains "$inst" "Name=Claude (do not use - not isolated)" \
+         "the shadow says what it is, because NoDisplay is a request not a guarantee"
+
 # --- the menu bar reads the process table with a tool that prints argv --------
 # `pgrep -f -a` is a GNU extension. BSD pgrep, which is what macOS ships, prints
 # bare pids whatever you pass it, so scanning its output for the client's -/v:
