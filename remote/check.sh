@@ -18,6 +18,28 @@ me="$(id -un)"
 if systemctl is-active --quiet xrdp 2>/dev/null; then p ok "xrdp is running"
 else p bad "xrdp is not running"; f "sudo systemctl start xrdp"; fi
 
+# Can this account log in at all.
+#
+# The precondition that guarantees failure while every other check is green.
+# An account made with `adduser --disabled-password` has no password, and xrdp
+# refuses it whatever is typed. What you see is FreeRDP's own credentials box,
+# which reappears on each attempt and says nothing about why, so it reads as a
+# wrong password rather than as an account that cannot accept one.
+#
+# `passwd -S` prints one status letter: P has a usable password, L is locked,
+# NP has none at all. Only P can log in.
+locked="$(passwd -S "$me" 2>/dev/null | awk '{print $2}')"
+case "$locked" in
+  P)  p ok "$me has a password, so xrdp can accept a login" ;;
+  L)  p bad "$me is locked (passwd -S says L), so every RDP login fails whatever you type"
+      f "on the server: sudo passwd $me" ;;
+  NP) p bad "$me has no password at all (passwd -S says NP), so xrdp will refuse it"
+      f "on the server: sudo passwd $me" ;;
+  # Not every box lets an unprivileged user read this, and a check that cannot
+  # read its input has learned nothing rather than found a problem.
+  *)  p note "could not read whether $me has a password (passwd -S said '${locked:-nothing}')" ;;
+esac
+
 if systemctl is-active --quiet xrdp-sesman 2>/dev/null; then p ok "xrdp-sesman is running"
 else p bad "xrdp-sesman is not running"; fi
 

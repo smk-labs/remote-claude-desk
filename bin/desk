@@ -252,7 +252,29 @@ run_client() {
     # printed, which is exactly when you most want it.
     rc="${PIPESTATUS[1]}"
   else
-    desk_warn "No Keychain item for '$DESK_KEYCHAIN_SERVICE'. Run: desk-setup"
+    # Refuse, rather than warn and hand over FreeRDP's own credentials box.
+    #
+    # The warning was printed and then scrolled past, and what the person
+    # actually saw was a dialog asking for a username, a domain and a password,
+    # with no hint that nothing had been stored and no hint that the account on
+    # the far side may not even have a password yet. Typing into it cannot work
+    # in the case that produces it, so it is a dead end wearing the costume of a
+    # login prompt. Failing here says both halves of the fix instead.
+    #
+    # DESK_ASK=1 still gets the old behaviour, for anyone who genuinely wants to
+    # type it by hand and knows the account can accept it.
+    if [ "${DESK_ASK:-0}" != 1 ]; then
+      desk_warn "No password stored for '$DESK_USER' on $DESK_HOST, so there is nothing to log in with."
+      desk_warn ""
+      desk_warn "Two steps, and they are separate machines:"
+      desk_warn "  1. on the server, give the account a password:  ssh $DESK_HOST 'sudo passwd $DESK_USER'"
+      desk_warn "     (an account made with --disabled-password has none, and xrdp refuses it)"
+      desk_warn "  2. on this Mac, store that same password:       desk-setup"
+      desk_warn ""
+      desk_warn "Then: desk-doctor && desk.  To type it by hand instead: DESK_ASK=1 desk"
+      return 1
+    fi
+    desk_warn "No Keychain item for '$DESK_KEYCHAIN_SERVICE'; FreeRDP will ask. Run desk-setup to stop that."
     sdl-freerdp "${ARGS[@]}" 2>&1 | tee -a "$LOG"
     rc="${PIPESTATUS[0]}"
   fi
