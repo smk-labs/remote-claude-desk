@@ -33,19 +33,17 @@ fi
 
 # ─── config ──────────────────────────────────────────────────────────────────
 head_ "Config"
-CONFIG=""
-for c in "$HOME/.config/remote-claude-desk/config.sh" "$ROOT/config.sh"; do
-  [ -f "$c" ] && { CONFIG="$c"; break; }
-done
-if [ -z "$CONFIG" ]; then
-  bad "no config.sh"
-  fix "cp $ROOT/config.example.sh $ROOT/config.sh, then set DESK_HOST and DESK_USER"
-  echo
-  echo "Nothing else can be checked without it."
-  exit 1
-fi
-ok "config at $CONFIG"
+# Which file wins is desk_load_config's decision, and this asks it rather than
+# working it out again. It used to keep a second copy of the candidate list,
+# which was fine while there were exactly two candidates and wrong the moment
+# DESK_CONFIG named a third: the doctor loaded one machine's config and printed
+# the other machine's path, which is the one line in this whole command a person
+# reads to check they are pointed at the right box.
+#
+# The missing-config case is gone from here too, rather than duplicated:
+# desk_load_config exits with the same two lines of instruction.
 desk_load_config "$ROOT"
+ok "config at $DESK_CONFIG_FILE"
 ok "host '$DESK_HOST', user '$DESK_USER', listener $DESK_RDP_ADDR:$DESK_RDP_PORT"
 
 # ─── the Mac side ────────────────────────────────────────────────────────────

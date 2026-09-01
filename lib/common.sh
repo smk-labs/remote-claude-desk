@@ -50,11 +50,29 @@ desk_load_config() {
   # Where the repo lives, so desk_remote_run can find remote/ no matter which
   # directory the caller was invoked from or symlinked into.
   DESK_ROOT="$root"
-  for candidate in \
-      "$HOME/.config/remote-claude-desk/config.sh" \
-      "$root/config.sh"; do
-    [ -f "$candidate" ] && { found="$candidate"; break; }
-  done
+
+  # DESK_CONFIG names one file and skips the search, which is what a second
+  # machine needs. The two candidates below are a single active desk: pointing
+  # them at another box means editing the file every time you switch, and the
+  # menu bar app cannot do that at all, because every row it draws runs the same
+  # `desk`. With this, a row is `DESK_CONFIG=~/.../config.other.sh desk`.
+  #
+  # Named rather than found, so a typo is an error instead of a silent fall back
+  # to whichever config was already there, which would connect you to the wrong
+  # machine and look like it worked.
+  if [ -n "${DESK_CONFIG:-}" ]; then
+    # Expanded here because this commonly arrives from a config file or a menu
+    # row written by hand, where a leading ~ is what a person types.
+    case "$DESK_CONFIG" in "~/"*) DESK_CONFIG="$HOME/${DESK_CONFIG#\~/}" ;; esac
+    [ -f "$DESK_CONFIG" ] || desk_die "DESK_CONFIG names $DESK_CONFIG, which is not a file"
+    found="$DESK_CONFIG"
+  else
+    for candidate in \
+        "$HOME/.config/remote-claude-desk/config.sh" \
+        "$root/config.sh"; do
+      [ -f "$candidate" ] && { found="$candidate"; break; }
+    done
+  fi
 
   if [ -z "$found" ]; then
     desk_warn "No config found. Create one:"

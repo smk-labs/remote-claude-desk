@@ -93,6 +93,14 @@ extension Bar: NSMenuDelegate {
         menu.addItem(head)
         menu.addItem(.separator())
 
+        // The list is labelled, because a bare machine name under a status line
+        // reads as part of the status rather than as something to click. With
+        // one machine that was merely unclear; with two it is a menu with no
+        // idea what its middle section is for.
+        let label = NSMenuItem(title: "Connections", action: nil, keyEquivalent: "")
+        label.isEnabled = false
+        menu.addItem(label)
+
         let list = machines()
         if list.isEmpty {
             let none = NSMenuItem(title: "No machines yet", action: nil, keyEquivalent: "")

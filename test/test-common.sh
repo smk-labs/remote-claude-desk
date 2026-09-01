@@ -71,5 +71,31 @@ chmod 600 "$tmp/config.sh"
 printf 'DESK_HOST=mybox\nDESK_USER=me\n' > "$tmp/config.sh"
 ( desk_load_config "$tmp" >/dev/null 2>&1 ) && bad "the unedited example config was accepted" \
                                             || ok "an unedited example config is refused"
+
+# --- DESK_CONFIG names one file and skips the search -------------------------
+# What a second machine needs: the menu bar app runs the same `desk` for every
+# row it draws, so the only thing that can differ between rows is the environment.
+mkdir -p "$HOME/.config/remote-claude-desk"
+printf 'DESK_HOST=fromhome\nDESK_USER=u\n' > "$HOME/.config/remote-claude-desk/config.sh"
+chmod 600 "$HOME/.config/remote-claude-desk/config.sh"
+printf 'DESK_HOST=named\nDESK_USER=u\n' > "$tmp/other.sh"
+chmod 600 "$tmp/other.sh"
+
+got="$( DESK_CONFIG="$tmp/other.sh" bash -c '. "'"$ROOT"'/lib/common.sh"; desk_load_config "'"$tmp"'" >/dev/null 2>&1; printf %s "$DESK_HOST"' )"
+is "$got" "named" "DESK_CONFIG wins over the config in the home directory"
+
+got="$( bash -c '. "'"$ROOT"'/lib/common.sh"; desk_load_config "'"$tmp"'" >/dev/null 2>&1; printf %s "$DESK_HOST"' )"
+is "$got" "fromhome" "without it, the home directory config still wins"
+
+got="$( DESK_CONFIG="$tmp/other.sh" bash -c '. "'"$ROOT"'/lib/common.sh"; desk_load_config "'"$tmp"'" >/dev/null 2>&1; printf %s "$DESK_CONFIG_FILE"' )"
+is "$got" "$tmp/other.sh" "the file it reports is the file it loaded"
+
+# A name that is not there is an error, never a quiet fall back to the config
+# that happened to be lying around: that would connect you to the other machine
+# and look like it had worked.
+( DESK_CONFIG="$tmp/nope.sh" desk_load_config "$tmp" >/dev/null 2>&1 ) \
+  && bad "a DESK_CONFIG naming nothing was accepted" \
+  || ok "a DESK_CONFIG naming nothing is refused"
+
 HOME="$HOME_BEFORE"
 rm -rf "$tmp"
