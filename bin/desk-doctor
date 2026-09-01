@@ -70,7 +70,7 @@ case ":$PATH:" in
      fix "add to your shell profile:  export PATH=\"\$HOME/bin:\$PATH\"" ;;
 esac
 
-for name in desk desk-doctor desk-tunnel; do
+for name in $DESK_COMMANDS; do
   link="$HOME/bin/$name"
   if [ ! -e "$link" ]; then
     warn "~/bin/$name is missing"

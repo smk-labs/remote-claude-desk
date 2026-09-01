@@ -42,6 +42,18 @@ desk_resolve() {
 
 # ─── config ──────────────────────────────────────────────────────────────────
 
+# The commands that go on PATH, in one place.
+#
+# There were three copies of this list: the installer's, the uninstaller's and
+# the doctor's. `desk-setup` was in none of them, so a command that shipped,
+# was executable, and was named in the README's own quick start was never linked
+# by anything, and the first line a new user was told to run answered "command
+# not found". Three lists agreeing is not a fact anyone checks; one list is.
+#
+# `desk-clip` is deliberately absent. It is found next to `desk` rather than
+# called by name, so putting it on PATH would suggest it is meant to be typed.
+DESK_COMMANDS="desk desk-doctor desk-setup desk-tunnel"
+
 # Load config.sh, from the user's config dir first so a clone can stay pristine.
 # Exits with instructions rather than running against the example values, which
 # would otherwise fail later with a confusing SSH error.

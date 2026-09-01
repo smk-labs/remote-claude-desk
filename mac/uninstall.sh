@@ -19,7 +19,8 @@ else
 fi
 
 BIN_DIR="$HOME/bin"
-BIN_LINKS="desk desk-doctor desk-setup desk-tunnel"
+# The list lives in lib/common.sh, sourced above, so this cannot drift from it.
+BIN_LINKS="$DESK_COMMANDS"
 FREERDP_FILE="$HOME/.config/freerdp/sdl-freerdp.json"
 KARABINER_FILE="$HOME/.config/karabiner/assets/complex_modifications/remote-claude-desk.json"
 

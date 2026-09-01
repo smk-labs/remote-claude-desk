@@ -36,7 +36,8 @@ fi
 # ---------------------------------------------------------------------------
 
 BIN_DIR="$HOME/bin"
-BIN_LINKS="desk desk-doctor desk-setup desk-tunnel"
+# The list lives in lib/common.sh, sourced above, so this cannot drift from it.
+BIN_LINKS="$DESK_COMMANDS"
 FREERDP_DIR="$HOME/.config/freerdp"
 FREERDP_FILE="$FREERDP_DIR/sdl-freerdp.json"
 KARABINER_DIR="$HOME/.config/karabiner/assets/complex_modifications"

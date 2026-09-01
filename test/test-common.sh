@@ -38,6 +38,22 @@ is "$(_pattern_for deskclip-agent)" "[d]eskclip-agent" "the kill pattern is brac
 lacks "pkill -f '$(_pattern_for deskclip-agent)'" "deskclip-agent" \
       "the literal never appears on the command line that kills it"
 
+# --- every command in bin/ is on the list that puts commands on PATH ---------
+# The bug this replaces: `desk-setup` shipped, was executable, was the first word
+# of the README's own quick start, and was in none of the three copies of the
+# list, so nothing ever linked it. Comparing the list against the directory is
+# the only check that catches the next one, because a list that is merely
+# self-consistent is still wrong when a file is added beside it.
+expected="$(cd "$ROOT/bin" && ls | grep -v '^desk-clip$' | sort | tr '\n' ' ')"
+actual="$(printf '%s ' $(printf '%s\n' $DESK_COMMANDS | sort))"
+is "$actual" "$expected" "DESK_COMMANDS lists every command in bin/ except desk-clip"
+
+# desk-clip is left out on purpose, and saying so here stops someone "fixing" it.
+case " $DESK_COMMANDS " in
+  *" desk-clip "*) bad "desk-clip is on PATH, but it is meant to be found next to desk" ;;
+  *) ok "desk-clip is deliberately not on PATH" ;;
+esac
+
 # --- desk_load_config refuses a config anyone else can write -----------------
 # It is SOURCED, so everything in it runs.
 tmp="$(mktemp -d)"
