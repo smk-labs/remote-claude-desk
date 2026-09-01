@@ -151,6 +151,12 @@ else
     ok "SSH master is up"
   else
     warn "SSH master is down (desk brings it up on its own)"
+    # If a keepalive helper left a reason, show it. A background helper that
+    # fails silently is how a dead connection stays unnoticed until the moment
+    # it is needed.
+    if [ -f "$HOME/.ssh/ousmousa-status" ]; then
+      fix "last keepalive result: $(cat "$HOME/.ssh/ousmousa-status")"
+    fi
     [ -n "$DESK_CONNECT_CMD" ] && fix "it will run DESK_CONNECT_CMD" \
                                || fix "it will run a plain ssh -fNM"
   fi
