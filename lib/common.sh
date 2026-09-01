@@ -182,13 +182,25 @@ desk_ensure_master() {
   desk_master_up && return 0
   desk_say "SSH master is down, bringing it up..."
 
-  if [ -n "${DESK_CONNECT_CMD:-}" ]; then
-    # Deliberately eval'd: the hook is a command line from the user's own
-    # config, and it needs $DESK_SSH_SOCKET and $DESK_HOST expanded inside it.
-    eval "$DESK_CONNECT_CMD" || desk_master_failed "DESK_CONNECT_CMD failed."
-  else
-    ssh -fNM -S "$DESK_SSH_SOCKET" "$DESK_HOST" \
-      || desk_master_failed "Could not open an SSH master to $DESK_HOST."
+  # Twice, not once. A login that goes through a 2FA helper fails for reasons
+  # that are gone a second later: the expect script times out waiting for a
+  # prompt that was slow, or the tunnel the login rides over was mid-reconnect.
+  # Dying on the first of those sent the user to a terminal to run their own
+  # connect command by hand, which succeeded, which made desk look broken when
+  # only the timing was.
+  _connect_once() {
+    if [ -n "${DESK_CONNECT_CMD:-}" ]; then
+      # Deliberately eval'd: the hook is a command line from the user's own
+      # config, and it needs $DESK_SSH_SOCKET and $DESK_HOST expanded inside it.
+      eval "$DESK_CONNECT_CMD"
+    else
+      ssh -fNM -S "$DESK_SSH_SOCKET" "$DESK_HOST"
+    fi
+  }
+
+  if ! _connect_once; then
+    desk_say "login did not go through, trying once more..."
+    _connect_once || desk_master_failed "Could not open an SSH master to $DESK_HOST."
   fi
 
   desk_retry 10 1 1 -- desk_master_up \
