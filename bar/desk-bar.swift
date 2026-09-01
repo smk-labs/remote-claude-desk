@@ -24,16 +24,60 @@ func machines() -> [(String, String)] {
     }
 }
 
-/// True while an RDP client is running. `pgrep` and not a tracked child, so a
-/// session someone started in a terminal is not reported as disconnected.
-func connected() -> Bool {
+/// The local ports that currently have an RDP client on them.
+///
+/// Ports, not a yes/no, because one machine per bar stopped being true. Each
+/// machine tunnels to its own loopback port, so the port is what tells two live
+/// sessions apart, and a bare "connected" reduced both of them to one lamp and
+/// one Disconnect that could only ever reach whichever config happened to be
+/// the default.
+///
+/// Read from the process table rather than from children we spawned, so a
+/// session started in a terminal counts too.
+func livePorts() -> Set<String> {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-    p.arguments = ["-x", "sdl-freerdp"]
-    p.standardOutput = FileHandle.nullDevice
+    p.arguments = ["-f", "-a", "sdl-freerdp"]
+    let pipe = Pipe()
+    p.standardOutput = pipe
     p.standardError = FileHandle.nullDevice
-    try? p.run(); p.waitUntilExit()
-    return p.terminationStatus == 0
+    try? p.run()
+    let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    p.waitUntilExit()
+
+    var ports = Set<String>()
+    for line in out.split(separator: "\n") {
+        guard let r = line.range(of: "/v:127.0.0.1:") else { continue }
+        let tail = line[r.upperBound...]
+        let port = tail.prefix { $0.isNumber }
+        if !port.isEmpty { ports.insert(String(port)) }
+    }
+    return ports
+}
+
+/// Which loopback port a machine's row uses.
+///
+/// The row is a shell command, and the only thing in it that decides the port
+/// is DESK_CONFIG. So: find that assignment, fall back to the default config,
+/// and read DESK_LOCAL_PORT out of the file. Parsing a config file from a menu
+/// bar is not elegant, but the alternative is running `desk` once per row on
+/// every menu open, and this menu should open instantly.
+func port(forCommand cmd: String) -> String? {
+    var path = "~/.config/remote-claude-desk/config.sh"
+    if let r = cmd.range(of: "DESK_CONFIG=") {
+        let tail = cmd[r.upperBound...]
+        let value = tail.prefix { !$0.isWhitespace }
+        if !value.isEmpty { path = String(value) }
+    }
+    path = (path as NSString).expandingTildeInPath
+    guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+    for line in text.split(separator: "\n") {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        guard t.hasPrefix("DESK_LOCAL_PORT=") else { continue }
+        return t.dropFirst("DESK_LOCAL_PORT=".count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+    }
+    return nil
 }
 
 func shell(_ command: String) {
@@ -56,7 +100,7 @@ class Bar: NSObject, NSApplicationDelegate {
     }
 
     func paint() {
-        let live = connected()
+        let live = !livePorts().isEmpty
         guard live != on || item.button?.image == nil else { return }
         on = live
         let name = live ? "display" : "display.trianglebadge.exclamationmark"
@@ -70,7 +114,18 @@ class Bar: NSObject, NSApplicationDelegate {
         shell(cmd)
     }
 
-    @objc func stop() { shell("desk --stop") }
+    /// Disconnect ONE machine, by running that row's own command with --stop.
+    /// The old version ran a bare `desk --stop`, which loads the default config
+    /// and therefore could only ever reach the default machine: with a second
+    /// machine added, Disconnect silently did nothing for it.
+    @objc func stop(_ sender: NSMenuItem) {
+        guard let cmd = sender.representedObject as? String else { return }
+        shell("\(cmd) --stop")
+    }
+
+    @objc func stopAll() {
+        for (_, cmd) in machines() { shell("\(cmd) --stop") }
+    }
 
     @objc func edit() {
         let dir = (CONFIG as NSString).deletingLastPathComponent
@@ -87,8 +142,15 @@ class Bar: NSObject, NSApplicationDelegate {
 extension Bar: NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         menu.removeAllItems()
-        let live = connected()
-        let head = NSMenuItem(title: live ? "Connected" : "Not connected", action: nil, keyEquivalent: "")
+        let ports = livePorts()
+        let list = machines()
+        let liveNames = list.filter { if let p = port(forCommand: $0.1) { return ports.contains(p) }
+                                      return false }
+        let head = NSMenuItem(
+            title: liveNames.isEmpty ? "Not connected"
+                 : liveNames.count == 1 ? "Connected to \(liveNames[0].0)"
+                 : "Connected to \(liveNames.count) machines",
+            action: nil, keyEquivalent: "")
         head.isEnabled = false
         menu.addItem(head)
         menu.addItem(.separator())
@@ -101,7 +163,6 @@ extension Bar: NSMenuDelegate {
         label.isEnabled = false
         menu.addItem(label)
 
-        let list = machines()
         if list.isEmpty {
             let none = NSMenuItem(title: "No machines yet", action: nil, keyEquivalent: "")
             none.isEnabled = false
@@ -111,14 +172,36 @@ extension Bar: NSMenuDelegate {
             let row = NSMenuItem(title: name, action: #selector(start(_:)), keyEquivalent: "")
             row.target = self
             row.representedObject = cmd
+            // A tick beside the machine that is actually up. With two rows and
+            // one status line there was no way to tell which one you were
+            // looking at.
+            if let p = port(forCommand: cmd), ports.contains(p) { row.state = .on }
             menu.addItem(row)
         }
 
         menu.addItem(.separator())
-        if live {
-            let off = NSMenuItem(title: "Disconnect", action: #selector(stop), keyEquivalent: "")
-            off.target = self
+
+        // Disconnect is ALWAYS here, greyed out when there is nothing to
+        // disconnect. Hiding it meant the control vanished at exactly the
+        // moment you went looking for it, which reads as the app losing a
+        // feature rather than as the session being down.
+        if liveNames.isEmpty {
+            let off = NSMenuItem(title: "Disconnect", action: nil, keyEquivalent: "")
+            off.isEnabled = false
             menu.addItem(off)
+        } else {
+            for (name, cmd) in liveNames {
+                let off = NSMenuItem(title: liveNames.count == 1 ? "Disconnect" : "Disconnect \(name)",
+                                     action: #selector(stop(_:)), keyEquivalent: "")
+                off.target = self
+                off.representedObject = cmd
+                menu.addItem(off)
+            }
+            if liveNames.count > 1 {
+                let all = NSMenuItem(title: "Disconnect all", action: #selector(stopAll), keyEquivalent: "")
+                all.target = self
+                menu.addItem(all)
+            }
         }
         let ed = NSMenuItem(title: "Edit machines…", action: #selector(edit), keyEquivalent: "")
         ed.target = self
