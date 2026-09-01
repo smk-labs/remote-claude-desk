@@ -43,6 +43,17 @@ lacks "pkill -f '$(_pattern_for deskclip-agent)'" "deskclip-agent" \
 tmp="$(mktemp -d)"
 printf 'DESK_HOST=h\nDESK_USER=u\n' > "$tmp/config.sh"
 
+# HOME is moved somewhere empty for these four, and that is the whole reason they
+# mean anything. `desk_load_config` prefers ~/.config/remote-claude-desk/config.sh
+# over the one in the repo, so on a machine where the developer actually uses this
+# tool every check below was reading their real config instead of the fixture: the
+# three refusals "passed" because a 600 file with real values loads, and the
+# permission the test had just set was never looked at. Found on 2026-09-01, on
+# the first machine that had both a user config and a reason to run the suite.
+HOME_BEFORE="$HOME"
+mkdir -p "$tmp/home"
+HOME="$tmp/home"
+
 chmod 600 "$tmp/config.sh"
 ( desk_load_config "$tmp" >/dev/null 2>&1 ) && ok "a 600 config loads" \
                                             || bad "a 600 config was refused"
@@ -60,4 +71,5 @@ chmod 600 "$tmp/config.sh"
 printf 'DESK_HOST=mybox\nDESK_USER=me\n' > "$tmp/config.sh"
 ( desk_load_config "$tmp" >/dev/null 2>&1 ) && bad "the unedited example config was accepted" \
                                             || ok "an unedited example config is refused"
+HOME="$HOME_BEFORE"
 rm -rf "$tmp"
