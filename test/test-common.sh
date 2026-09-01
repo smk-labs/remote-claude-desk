@@ -38,6 +38,39 @@ is "$(_pattern_for deskclip-agent)" "[d]eskclip-agent" "the kill pattern is brac
 lacks "pkill -f '$(_pattern_for deskclip-agent)'" "deskclip-agent" \
       "the literal never appears on the command line that kills it"
 
+# --- the menu bar reads the process table with a tool that prints argv --------
+# `pgrep -f -a` is a GNU extension. BSD pgrep, which is what macOS ships, prints
+# bare pids whatever you pass it, so scanning its output for the client's -/v:
+# flag matched nothing and every session read as down: no tick anywhere and a
+# Disconnect greyed out while a window was open in front of you. It fails
+# silently and identically to "nothing is connected".
+# The path, not the bare word: the comment above the fix names pgrep in prose,
+# and a check that a comment can fail is a check nobody will trust twice.
+bar_src="$(cat "$ROOT/bar/desk-bar.swift")"
+lacks "$bar_src" "/usr/bin/pgrep" "the menu bar does not run pgrep, which prints no argv on macOS"
+contains "$bar_src" "/bin/ps" "the menu bar reads the process table with ps"
+
+# And ps must print arguments here, not just names, or the port cannot be read
+# off the line. A full argv has a slash and then a space.
+# Captured, then matched with a glob, rather than piped into `grep -q`. Under
+# `pipefail` that pipeline reports failure even when the match succeeds: grep
+# exits at the first hit, ps is killed by SIGPIPE, and the non-zero from the
+# dead ps becomes the status of the whole pipeline. The check then fails while
+# what it is checking is perfectly true.
+ps_out="$(/bin/ps -Ao command=)"
+case "$ps_out" in
+  */*\ *) ok "ps -Ao command= prints full argv on this machine" ;;
+  *)      bad "ps -Ao command= printed no arguments, so the menu bar cannot see a session" ;;
+esac
+
+# --- the menu bar and desk agree on the default local port -------------------
+# The bar cannot source a config, so it carries its own copy of the fallback.
+# If the two drift, the bar watches a port nothing listens on and the tick and
+# the Disconnect quietly disappear for every machine that does not name a port.
+swift_default="$(sed -n 's/^let DEFAULT_LOCAL_PORT = "\([0-9]*\)".*/\1/p' "$ROOT/bar/desk-bar.swift" | head -1)"
+shell_default="$(sed -n 's/.*DESK_LOCAL_PORT:=\([0-9]*\).*/\1/p' "$ROOT/lib/common.sh" | head -1)"
+is "$swift_default" "$shell_default" "the menu bar and desk agree on the default local port"
+
 # --- every command in bin/ is on the list that puts commands on PATH ---------
 # The bug this replaces: `desk-setup` shipped, was executable, was the first word
 # of the README's own quick start, and was in none of the three copies of the

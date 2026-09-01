@@ -35,9 +35,19 @@ func machines() -> [(String, String)] {
 /// Read from the process table rather than from children we spawned, so a
 /// session started in a terminal counts too.
 func livePorts() -> Set<String> {
+    // `ps`, not `pgrep -f -a`.
+    //
+    // `-a` is a GNU extension. BSD pgrep, which is what macOS ships, has no such
+    // flag and prints bare pids whatever you pass it, so scanning its output for
+    // "/v:127.0.0.1:" found nothing, always. Every session read as down: no tick
+    // on any row and a Disconnect that was permanently greyed out, on the very
+    // machine you were looking at through a live window. It fails silently and
+    // identically to "nothing is connected", which is the failure it was written
+    // to fix. Measured on macOS 2026-09-01: `pgrep -f -a sdl-freerdp` printed
+    // two pids and not one argument.
     let p = Process()
-    p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-    p.arguments = ["-f", "-a", "sdl-freerdp"]
+    p.executableURL = URL(fileURLWithPath: "/bin/ps")
+    p.arguments = ["-Ao", "command="]
     let pipe = Pipe()
     p.standardOutput = pipe
     p.standardError = FileHandle.nullDevice
@@ -47,6 +57,9 @@ func livePorts() -> Set<String> {
 
     var ports = Set<String>()
     for line in out.split(separator: "\n") {
+        // The client's own name has to be on the line, or a shell that merely
+        // mentions the pattern counts as a session.
+        guard line.contains("sdl-freerdp /v:127.0.0.1:") else { continue }
         guard let r = line.range(of: "/v:127.0.0.1:") else { continue }
         let tail = line[r.upperBound...]
         let port = tail.prefix { $0.isNumber }
@@ -54,6 +67,13 @@ func livePorts() -> Set<String> {
     }
     return ports
 }
+
+/// The port `desk` falls back to when a config names none.
+///
+/// Duplicated from `DESK_LOCAL_PORT:=33890` in lib/common.sh, because a menu bar
+/// is not a shell and cannot ask. A check in test/run holds the two together, so
+/// this cannot drift into the bar quietly watching a port nothing listens on.
+let DEFAULT_LOCAL_PORT = "33890"
 
 /// Which loopback port a machine's row uses.
 ///
@@ -74,10 +94,26 @@ func port(forCommand cmd: String) -> String? {
     for line in text.split(separator: "\n") {
         let t = line.trimmingCharacters(in: .whitespaces)
         guard t.hasPrefix("DESK_LOCAL_PORT=") else { continue }
-        return t.dropFirst("DESK_LOCAL_PORT=".count)
-                .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        let raw = t.dropFirst("DESK_LOCAL_PORT=".count)
+                   .trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+        if !raw.isEmpty, raw.allSatisfy(\.isNumber) { return raw }
+
+        // The shipped example writes DESK_LOCAL_PORT="${DESK_LOCAL_PORT:-33890}",
+        // a shell default that this is not a shell to expand. Take the number out
+        // of it rather than giving up, because giving up returns nil, and nil is
+        // what removes the tick and the Disconnect. A config copied straight from
+        // config.example.sh would have hit the exact failure this function exists
+        // to fix, which is the button vanishing while the session is up.
+        if let r = raw.range(of: ":-") {
+            let n = raw[r.upperBound...].prefix { $0.isNumber }
+            if !n.isEmpty { return String(n) }
+        }
+        return DEFAULT_LOCAL_PORT
     }
-    return nil
+
+    // No line at all is not "unknown". desk_load_config fills in the same
+    // default, so the machine is on that port and the bar should say so.
+    return DEFAULT_LOCAL_PORT
 }
 
 func shell(_ command: String) {
