@@ -417,21 +417,39 @@ ENTRY_BODY
   # central ~/.claude, which is the whole thing this setup exists to avoid.
   # A user-level copy with NoDisplay=true shadows the system entry by desktop
   # file id, so the packaged file itself stays untouched and survives upgrades.
-  if [ -f /usr/share/applications/claude-desktop.desktop ]; then
-    HIDDEN="$DESKTOP_DIR/claude-desktop.desktop"
+  #
+  # Found by what it RUNS, not by what it is called. This looked only for
+  # claude-desktop.desktop, and the package ships com.anthropic.Claude.desktop,
+  # so it reported "nothing to hide" and hid nothing: the menu then held two
+  # Claude entries, and the plain one is a single click away from starting the
+  # app against the central ~/.claude. The isolation was intact and trivially
+  # bypassable, which is worse than either alone because the menu gave no hint
+  # which entry was which. A hardcoded filename is a guess about somebody else's
+  # packaging; the Exec line is the thing that actually matters.
+  FOUND_PACKAGED=0
+  for packaged in /usr/share/applications/*.desktop; do
+    [ -f "$packaged" ] || continue
+    # Ours, and any copy already shadowed, are not the packaged launcher.
+    case "$(basename "$packaged")" in claude-desktop-isolated.desktop) continue ;; esac
+    # Anchored to the start of the Exec value: the binary is either bare or a
+    # full path, and "claude-desktop-isolated" must not match, which is why the
+    # name has to end at a space or end of line.
+    grep -qE '^Exec=([^ ]*/)?claude-desktop( |$)' "$packaged" || continue
+
+    FOUND_PACKAGED=1
+    HIDDEN="$DESKTOP_DIR/$(basename "$packaged")"
     TMP_HIDDEN=$(mktemp)
-    grep -v '^NoDisplay=' /usr/share/applications/claude-desktop.desktop >"$TMP_HIDDEN" || true
+    grep -v '^NoDisplay=' "$packaged" >"$TMP_HIDDEN" || true
     printf 'NoDisplay=true\n' >>"$TMP_HIDDEN"
     if cmp -s "$TMP_HIDDEN" "$HIDDEN" 2>/dev/null; then
-      skip "packaged entry is already hidden"
+      skip "packaged entry $(basename "$packaged") is already hidden"
     else
       $SUDO install -o "$DESK_USER" -g "$DESK_USER" -m 0644 -- "$TMP_HIDDEN" "$HIDDEN"
       did "hid the packaged launcher with $HIDDEN"
     fi
     rm -f "$TMP_HIDDEN"
-  else
-    skip "no packaged claude-desktop.desktop found, nothing to hide"
-  fi
+  done
+  [ "$FOUND_PACKAGED" = 1 ] || skip "no packaged Claude Desktop entry found, nothing to hide"
 fi
 
 # ─── restarts, or a refusal ──────────────────────────────────────────────────

@@ -38,6 +38,29 @@ is "$(_pattern_for deskclip-agent)" "[d]eskclip-agent" "the kill pattern is brac
 lacks "pkill -f '$(_pattern_for deskclip-agent)'" "deskclip-agent" \
       "the literal never appears on the command line that kills it"
 
+# --- the packaged Claude launcher is found by what it runs, not what it is called
+# It was looked for as claude-desktop.desktop. The package ships
+# com.anthropic.Claude.desktop, so the installer said "nothing to hide" and hid
+# nothing, and the menu carried two Claude entries: the isolated one, and one
+# click that starts the app against the central ~/.claude. That is the isolation
+# intact and trivially bypassable, with nothing on screen saying which is which.
+inst="$(cat "$ROOT/server/install.sh")"
+lacks "$inst" "/usr/share/applications/claude-desktop.desktop" \
+      "the installer does not look for the packaged entry by a guessed filename"
+
+# The pattern must match how the package actually writes it, and must NOT match
+# our own launcher, whose name merely starts the same way.
+_pat='^Exec=([^ ]*/)?claude-desktop( |$)'
+contains "$inst" "$_pat" "the installer matches the packaged entry on its Exec line"
+printf 'Exec=claude-desktop %%U\n' | grep -qE "$_pat" \
+  && ok "the pattern matches Exec=claude-desktop %U, which is what ships today" \
+  || bad "the pattern misses the Exec line the package actually writes"
+if printf 'Exec=/home/me/desktop-trial/bin/claude-desktop-isolated %%U\n' | grep -qE "$_pat"; then
+  bad "the pattern also matches our own isolated launcher, which it would then hide"
+else
+  ok "the pattern leaves the isolated launcher alone"
+fi
+
 # --- the menu bar reads the process table with a tool that prints argv --------
 # `pgrep -f -a` is a GNU extension. BSD pgrep, which is what macOS ships, prints
 # bare pids whatever you pass it, so scanning its output for the client's -/v:
