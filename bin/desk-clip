@@ -181,6 +181,10 @@ def pump(ag):
     # tool may set the pasteboard and synthesise Cmd+V 600 ms later, and the
     # push has to land inside that window. Measured: about 100 ms to notice
     # plus about 150 ms one way.
+    # The last pasteboard generation we fetched. A dict rather than a name so the
+    # loop below can set it without a global.
+    seen = {"count": ""}
+
     while True:
         if ag.poll() is not None:
             log("agent exited (rc=%s)" % ag.returncode)
@@ -194,6 +198,18 @@ def pump(ag):
                 if kind == "none":
                     time.sleep(MAC_POLL)
                     continue
+                # Ask for the contents only when the pasteboard has actually
+                # changed. changeCount is the one number NSPasteboard guarantees
+                # for this, and ignoring it was expensive in a way text hid: an
+                # image sat on the pasteboard and this re-read the whole picture
+                # ten times a second, for as long as it was there. On the machine
+                # it was found, 221 KB a tick, over the same SSH master the
+                # desktop's own pixels travel on.
+                count = said[0]
+                if count == seen["count"]:
+                    time.sleep(MAC_POLL)
+                    continue
+                seen["count"] = count
                 data = subprocess.run([PBIO, "read", kind], stdout=subprocess.PIPE,
                                       timeout=10).stdout
             else:
