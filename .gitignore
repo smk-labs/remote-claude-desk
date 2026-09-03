@@ -13,3 +13,4 @@ config.sh
 __pycache__/
 *.pyc
 .DS_Store
+bin/desk-pbio

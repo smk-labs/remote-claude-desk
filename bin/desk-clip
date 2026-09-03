@@ -49,6 +49,11 @@ import sys
 import threading
 import time
 
+# Built by mac/install.sh from mac/pbio.swift, and kept beside this file. It is
+# how an image is seen at all: pbpaste speaks text only, so before this a picture
+# on the pasteboard was invisible to the bridge and could not cross.
+PBIO = os.path.join(os.path.dirname(os.path.realpath(__file__)), "desk-pbio")
+
 HOST = os.environ.get("DESK_HOST", "")
 SOCKET = os.environ.get("DESK_SSH_SOCKET", "")
 DISPLAY = os.environ.get("DESK_DISPLAY", "")
@@ -181,8 +186,19 @@ def pump(ag):
             log("agent exited (rc=%s)" % ag.returncode)
             return
         try:
-            data = subprocess.run(["pbpaste"], stdout=subprocess.PIPE,
-                                  timeout=5, env=PB_ENV).stdout
+            kind = "text"
+            if os.path.exists(PBIO):
+                said = subprocess.run([PBIO, "kind"], stdout=subprocess.PIPE,
+                                      timeout=5).stdout.decode().split()
+                kind = said[1] if len(said) > 1 else "none"
+                if kind == "none":
+                    time.sleep(MAC_POLL)
+                    continue
+                data = subprocess.run([PBIO, "read", kind], stdout=subprocess.PIPE,
+                                      timeout=10).stdout
+            else:
+                data = subprocess.run(["pbpaste"], stdout=subprocess.PIPE,
+                                      timeout=5, env=PB_ENV).stdout
         except Exception:
             time.sleep(MAC_POLL)
             continue
@@ -201,7 +217,8 @@ def pump(ag):
                     last["remote"] = data
             if new:
                 try:
-                    ag.stdin.write(b"SET " + base64.b64encode(data) + b"\n")
+                    verb = b"SETIMG " if kind == "image" else b"SET "
+                    ag.stdin.write(verb + base64.b64encode(data) + b"\n")
                     ag.stdin.flush()
                 except Exception:
                     log("lost the agent channel")

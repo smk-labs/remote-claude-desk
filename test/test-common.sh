@@ -119,15 +119,20 @@ is "$swift_default" "$shell_default" "the menu bar and desk agree on the default
 # list, so nothing ever linked it. Comparing the list against the directory is
 # the only check that catches the next one, because a list that is merely
 # self-consistent is still wrong when a file is added beside it.
-expected="$(cd "$ROOT/bin" && ls | grep -v '^desk-clip$' | sort | tr '\n' ' ')"
+# desk-clip and desk-pbio are both found beside `desk` rather than typed, so
+# neither belongs on PATH. desk-pbio is also built rather than committed, so a
+# clean checkout does not have it and this list must not require it.
+expected="$(cd "$ROOT/bin" && ls | grep -vE '^(desk-clip|desk-pbio)$' | sort | tr '\n' ' ')"
 actual="$(printf '%s ' $(printf '%s\n' $DESK_COMMANDS | sort))"
 is "$actual" "$expected" "DESK_COMMANDS lists every command in bin/ except desk-clip"
 
 # desk-clip is left out on purpose, and saying so here stops someone "fixing" it.
-case " $DESK_COMMANDS " in
-  *" desk-clip "*) bad "desk-clip is on PATH, but it is meant to be found next to desk" ;;
-  *) ok "desk-clip is deliberately not on PATH" ;;
-esac
+for helper in desk-clip desk-pbio; do
+  case " $DESK_COMMANDS " in
+    *" $helper "*) bad "$helper is on PATH, but it is meant to be found next to desk" ;;
+    *) ok "$helper is deliberately not on PATH" ;;
+  esac
+done
 
 # --- desk_load_config refuses a config anyone else can write -----------------
 # It is SOURCED, so everything in it runs.

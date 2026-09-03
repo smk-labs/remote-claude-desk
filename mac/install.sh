@@ -167,7 +167,26 @@ desk_say ""
 # 3. the FreeRDP shortcut override
 # ---------------------------------------------------------------------------
 
-desk_say "3. FreeRDP shortcuts"
+desk_say "3. The pasteboard helper"
+
+# desk-clip reads the pasteboard through this rather than through pbpaste, which
+# speaks text only. Without it an image on the pasteboard is invisible to the
+# bridge and cannot cross at all, and text goes back to being at the mercy of the
+# shell's locale (docs/lessons.md, trap 2).
+PBIO_SRC="$ROOT/mac/pbio.swift"
+PBIO_OUT="$ROOT/bin/desk-pbio"
+if ! command -v swiftc >/dev/null 2>&1; then
+  desk_say "   NOTE    swiftc is not here, so images will not cross. Install the"
+  desk_say "           Xcode command line tools:  xcode-select --install"
+elif [ -x "$PBIO_OUT" ] && [ "$PBIO_OUT" -nt "$PBIO_SRC" ]; then
+  desk_say "   ok      $PBIO_OUT is already built"
+elif swiftc -O -o "$PBIO_OUT" "$PBIO_SRC" 2>/dev/null; then
+  desk_say "   built   $PBIO_OUT"
+else
+  desk_say "   MISSING $PBIO_OUT would not build, so images will not cross"
+fi
+
+desk_say "4. FreeRDP shortcuts"
 
 # Why this file exists: FreeRDP's SDL client keeps its own shortcuts, and the
 # default modifier for them is Right Shift. So Right Shift plus Enter toggled
@@ -194,7 +213,7 @@ desk_say ""
 # 4. the Karabiner rules
 # ---------------------------------------------------------------------------
 
-desk_say "4. Karabiner rules"
+desk_say "5. Karabiner rules"
 
 # The rules are copied into Karabiner's own import folder and never merged into
 # karabiner.json by hand. That file holds every device, profile and rule the

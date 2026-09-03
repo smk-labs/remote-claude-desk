@@ -20,14 +20,17 @@ quiet = [0.0]       # ignore polls for a moment after a SET, so a read that
                     # lands before xclip owns the selection cannot report the
                     # previous value as if someone had just copied it.
 
-def set_clip(data):
+def set_clip(data, target="UTF8_STRING"):
     if owner[0] and owner[0].poll() is None:
         owner[0].terminate()
         try: owner[0].wait(timeout=2)
         except Exception: owner[0].kill()
     mine[0]  = data
     quiet[0] = time.time() + 0.8
-    owner[0] = subprocess.Popen(["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-i"],
+    # image/png for a picture, UTF8_STRING for text. One owner either way: the
+    # selection can only have one, so an image replaces the text and vice versa,
+    # exactly as a copy on the Mac does.
+    owner[0] = subprocess.Popen(["xclip", "-selection", "clipboard", "-t", target, "-i"],
                                 stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL, env=ENV)
     owner[0].stdin.write(data); owner[0].stdin.close()
@@ -38,6 +41,13 @@ def reader():
         if line.startswith("SET "):
             try: set_clip(base64.b64decode(line[4:]))
             except Exception as e: sys.stderr.write("agent set: %r\n" % (e,))
+        elif line.startswith("SETIMG "):
+            # The picture arrives as png and is offered as image/png, which is
+            # the target Chromium and Qt actually read. xrdp's own clipboard
+            # offered image/bmp and nothing else, which is why this does not go
+            # through the RDP channel.
+            try: set_clip(base64.b64decode(line[7:]), "image/png")
+            except Exception as e: sys.stderr.write("agent setimg: %r\n" % (e,))
         elif line == "BYE":
             os._exit(0)
     os._exit(0)     # stdin closed: the Mac side is gone, so go with it rather
