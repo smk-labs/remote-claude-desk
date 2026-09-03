@@ -35,6 +35,27 @@ for k in $(seq 191 202); do
   xmodmap -e "keycode $k = ISO_Next_Group" 2>/dev/null
 done
 
+# Unlatch Caps Lock if the session came back with it stuck on.
+#
+# The symptom is on the Mac, not here, which is what makes it baffling: FreeRDP
+# mirrors this X server's LED state onto the client keyboard, so a Caps Lock
+# latched in the session lights the Caps Lock lamp on a Mac whose own Caps Lock
+# is off. Measured on 2026-09-03: `xset q` reported "Caps Lock: on" and
+# "LED mask: 00000001" here while the Mac's key was untouched, and one synthetic
+# Caps_Lock press cleared both.
+#
+# It latches because a lock key can arrive as a press with no matching release:
+# the client remaps modifiers (/kbd:remap for the two Super keys) and Karabiner
+# rewrites others, and a chord that changes shape between press and release
+# leaves the lock half-applied. Fixing the cause would mean owning every
+# remapping on both sides; clearing the state costs one keystroke per connect
+# and cannot make anything worse, because it only fires when X itself says the
+# lock is on.
+if xset q 2>/dev/null | grep -qE "Caps Lock: *on"; then
+  xdotool key --clearmodifiers Caps_Lock 2>/dev/null \
+    || xmodmap -e "keycode 66 = Caps_Lock" 2>/dev/null
+fi
+
 # Confirm, rather than assume. The caller retries until this passes several
 # times in a row, because the first success can land while xrdp is still
 # writing over the keymap.

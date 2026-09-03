@@ -43,3 +43,15 @@ for f in "$ROOT"/bin/* "$ROOT"/lib/*.sh; do
   fi
 done
 ok "no remote payload is embedded as a string literal"
+
+# --- a latched Caps Lock is cleared, because the symptom shows up on the Mac --
+# FreeRDP mirrors this X server's LED state onto the client keyboard, so a Caps
+# Lock stuck on here lights the lamp on a Mac whose own key is off. The guard
+# matters as much as the fix: firing unconditionally would toggle the lock ON
+# for anyone who had it deliberately off.
+layout="$(cat "$ROOT/remote/apply-layout.sh")"
+contains "$layout" 'Caps Lock: *on' \
+         "apply-layout only unlatches when X itself says the lock is on"
+contains "$layout" 'xdotool key --clearmodifiers Caps_Lock' \
+         "apply-layout clears a latched Caps Lock"
+
