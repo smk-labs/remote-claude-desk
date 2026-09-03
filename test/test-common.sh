@@ -38,6 +38,15 @@ is "$(_pattern_for deskclip-agent)" "[d]eskclip-agent" "the kill pattern is brac
 lacks "pkill -f '$(_pattern_for deskclip-agent)'" "deskclip-agent" \
       "the literal never appears on the command line that kills it"
 
+# --- the menu bar app does not trust the login profile for PATH ---------------
+# launchd gives Desk.app no PATH to inherit, so its `bash -lc` builds one from
+# the profile alone. On a Mac whose only bash login file never mentions ~/bin,
+# every row ran `desk` and got "command not found" into a log nobody opens, while
+# a terminal test passed because an interactive shell already exports ~/bin.
+bar="$(cat "$ROOT/bar/desk-bar.swift")"
+contains "$bar" 'PATH=\"$HOME/bin:$PATH\"' \
+         "the menu bar app prepends ~/bin rather than trusting the login profile"
+
 # --- the packaged Claude launcher is found by what it runs, not what it is called
 # It was looked for as claude-desktop.desktop. The package ships
 # com.anthropic.Claude.desktop, so the installer said "nothing to hide" and hid

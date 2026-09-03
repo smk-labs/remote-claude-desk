@@ -119,8 +119,19 @@ func port(forCommand cmd: String) -> String? {
 func shell(_ command: String) {
     let p = Process()
     p.executableURL = URL(fileURLWithPath: "/bin/bash")
-    // -lc so the login shell's PATH is there and `desk` resolves.
-    p.arguments = ["-lc", "\(command) >>'\(LOG)' 2>&1"]
+    // -lc for the login shell's PATH, and ~/bin prepended because that PATH is
+    // not enough on its own.
+    //
+    // launchd starts this app with no PATH to inherit, so `bash -l` builds one
+    // from the profile alone. On a Mac whose only bash login file is a ~/.profile
+    // that never mentions ~/bin, every row of this menu ran `desk` and got
+    // "command not found", silently, into the log nobody opens. Testing it from a
+    // terminal hides this perfectly: an interactive shell already exports ~/bin,
+    // and `bash -l` inherits it.
+    //
+    // ~/bin is where mac/install.sh puts every command, so naming it here is not
+    // a guess about the user's setup, it is the installer's own answer.
+    p.arguments = ["-lc", "PATH=\"$HOME/bin:$PATH\"; \(command) >>'\(LOG)' 2>&1"]
     try? p.run()   // deliberately not waited on: the bar must stay responsive
 }
 

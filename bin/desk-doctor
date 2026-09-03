@@ -70,6 +70,25 @@ case ":$PATH:" in
      fix "add to your shell profile:  export PATH=\"\$HOME/bin:\$PATH\"" ;;
 esac
 
+# The menu bar app does not run in your shell, and that is the whole point of
+# this check.
+#
+# launchd hands Desk.app no PATH, so its `bash -lc` builds one from the login
+# profile alone. The check above passes in the shell you are typing in, which
+# already exports ~/bin, and says nothing about that case: on a Mac whose only
+# bash login file never mentions ~/bin, every row of the menu ran `desk`, got
+# "command not found", and opened nothing, while the doctor reported PATH fine.
+# So ask the question the app actually asks, with the environment it actually has.
+if [ -x /bin/bash ]; then
+  if env -i HOME="$HOME" /bin/bash -lc 'command -v desk' >/dev/null 2>&1; then
+    ok "a login shell with no inherited PATH still finds desk (what Desk.app uses)"
+  else
+    warn "a login shell with no inherited PATH cannot find desk"
+    fix "the menu bar app prepends ~/bin itself, so rebuild it: $ROOT/bar/build"
+    fix "for terminals started the same way, add to ~/.profile: export PATH=\"\$HOME/bin:\$PATH\""
+  fi
+fi
+
 for name in $DESK_COMMANDS; do
   link="$HOME/bin/$name"
   if [ ! -e "$link" ]; then
