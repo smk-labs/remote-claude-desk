@@ -194,8 +194,12 @@ else
   # One round trip for everything, in remote/check.sh. Each line it prints is
   # "STATUS<tab>TEXT", and the loop below turns those back into the same four
   # verbs used locally, so a check reads identically whichever side it ran on.
+  # SIZE goes over too, because the framebuffer is priced on the server: xrdp
+  # encodes every frame in software, so the cost of DESK_SIZE is paid by a CPU
+  # that only the far side can count.
   REMOTE="$(desk_remote_run check.sh \
-              "MIN=$DESK_DISPLAY_MIN" "ADDR=$DESK_RDP_ADDR" "PORT=$DESK_RDP_PORT" 2>/dev/null)"
+              "MIN=$DESK_DISPLAY_MIN" "ADDR=$DESK_RDP_ADDR" "PORT=$DESK_RDP_PORT" \
+              "SIZE=${DESK_SIZE:-1920x1080}" 2>/dev/null)"
 
   if [ -z "$REMOTE" ]; then
     bad "the server checks returned nothing"

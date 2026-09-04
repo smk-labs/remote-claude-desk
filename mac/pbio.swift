@@ -28,10 +28,33 @@ func imageData() -> Data? {
     return rep.representation(using: .png, properties: [:])
 }
 
+// What is on the pasteboard, decided from the TYPE LIST alone.
+//
+// This is asked ten times a second, forever, so it must not touch the contents.
+// It used to answer by fetching them: `imageData() != nil` pulled the whole
+// picture out of the pasteboard server, and for a screenshot, which arrives as
+// TIFF and no PNG, it also decoded that TIFF and re-encoded a PNG, purely to
+// throw both away and print the word "image". The caller then skipped the item
+// because the changeCount had not moved, so the entire cost bought nothing.
+//
+// The tell was not CPU on this process, which exits in milliseconds. It was the
+// pasteboard server: ten full copies a second out of one shared, single-threaded
+// service, which every other app has to queue behind. That is what a beachball
+// in Claude Desktop, and an RDP window that stops repainting the moment you
+// press Cmd+C, actually looked like from the outside.
+//
+// `pb.types` is the list, not the data. Same precedence as before: image wins
+// over text, because a copy out of a web page carries both.
+func pasteboardKind() -> String {
+    let types = pb.types ?? []
+    if types.contains(.png) || types.contains(.tiff) { return "image" }
+    if types.contains(.string) { return "text" }
+    return "none"
+}
+
 switch args.first {
 case "kind":
-    let kind = imageData() != nil ? "image" : (pb.string(forType: .string) != nil ? "text" : "none")
-    print("\(pb.changeCount) \(kind)")
+    print("\(pb.changeCount) \(pasteboardKind())")
 case "read":
     let data: Data? = args.count > 1 && args[1] == "image"
         ? imageData()

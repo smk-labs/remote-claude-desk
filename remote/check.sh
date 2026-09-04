@@ -146,3 +146,81 @@ for s in /tmp/.X11-unix/X*; do
   [ "$(stat -c %U "$s" 2>/dev/null)" = "$me" ] || foreign=$((foreign+1))
 done
 [ "$foreign" -gt 0 ] && p note "$foreign X display(s) belong to other users on this box"
+
+# ─── headroom: can this box actually draw the desktop it is being asked for ───
+#
+# Every check above can be green on a machine that is unusable, and that is not
+# a hypothetical. On the box this was written against: xrdp running, sesman
+# tracking one live session, the listener on loopback, the ssl-cert group right,
+# 31 green lines. And one hung claude-desktop process holding an entire core for
+# eight hours, on a box that has two.
+#
+# What that felt like from the Mac was not "the server is busy". It was the
+# window coming up fine and then the pointer turning into a spinner the moment
+# you touched it, with macOS labelling the client Not Responding. Nothing in the
+# client says the far side ran out of CPU, so the fault points at the wrong
+# machine, which is the exact failure mode this file exists to prevent.
+#
+# So: three numbers nobody would think to look up by hand.
+
+cores="$(nproc 2>/dev/null || echo 0)"
+
+# A process that has averaged most of a core over its whole life.
+#
+# `ps` reports pcpu as an average over the process's lifetime, not an instant,
+# and that is what makes it usable here rather than noisy: a compile spiking to
+# 100% for a minute never reaches this, while something wedged since breakfast
+# does.
+#
+# The five-minute floor is not tidiness. Without it the top row was the `ps`
+# that this check runs, at 100% of its own two-millisecond life, and the check
+# reported the machine as hung every single time. Same shape as the bracket in
+# desk_remote_pkill: a check that reads the process list has to leave itself
+# out of it, and here age does that for free, because nothing that matters here
+# is under five minutes old.
+hog="$(ps -eo pcpu=,etimes=,comm= --sort=-pcpu 2>/dev/null \
+        | awk '$2 >= 300 { printf "%d %d %s", $1, $2, $3; exit }')"
+hog_cpu="${hog%% *}"
+case "$hog_cpu" in ''|*[!0-9]*) hog_cpu=0 ;; esac
+
+if [ "$hog_cpu" -ge 80 ] && [ "$cores" -gt 0 ]; then
+  rest="${hog#* }"
+  hog_hours=$(( ${rest%% *} / 3600 ))
+  p bad "'${hog##* }' has averaged ${hog_cpu}% of a core for ${hog_hours}h, and this box has $cores"
+  f "that is a hung process, not load. Log in to the server and end it."
+elif [ "$cores" -gt 0 ]; then
+  p ok "$cores core(s), nothing holding one permanently"
+fi
+
+# Memory, including swap. A desktop that has started swapping stutters in a way
+# that reads as a network problem from the other end.
+mem_free="$(awk '/^MemAvailable:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null)"
+swap_used="$(awk '/^SwapTotal:/{t=$2} /^SwapFree:/{f=$2} END{if (t>0) print int((t-f)/1024)}' /proc/meminfo 2>/dev/null)"
+if [ -n "$mem_free" ] && [ "$mem_free" -lt 400 ]; then
+  p bad "only ${mem_free} MB of memory is available, so the desktop will swap and stutter"
+  f "close something on the server, or give the box more RAM"
+elif [ -n "${swap_used:-}" ] && [ "$swap_used" -gt 100 ]; then
+  p warn "${mem_free} MB free, but ${swap_used} MB is already in swap"
+elif [ -n "$mem_free" ]; then
+  p ok "${mem_free} MB of memory available"
+fi
+
+# The framebuffer this connection has asked for, priced in the only currency
+# that matters: xrdp encodes every frame in software, on this CPU. Doubling the
+# pixels doubles that bill, and the client never mentions it.
+#
+# The line is 2.4 megapixels, which clears both 1920x1080 and 1920x1200. Above
+# that on 2 cores, a scroll in a repainting window queues frames faster than
+# they clear, and the input queues behind them.
+case "${SIZE:-}" in
+  [0-9]*x[0-9]*)
+    w="${SIZE%x*}"; h="${SIZE#*x}"
+    mpix=$(( w * h / 1000000 ))
+    if [ "$cores" -gt 0 ] && [ "$cores" -le 2 ] && [ "$(( w * h ))" -gt 2400000 ]; then
+      p warn "DESK_SIZE is ${SIZE} (${mpix} megapixels) and this box has $cores core(s) to encode it"
+      f "set DESK_SIZE to 1920x1200 on a 16:10 screen, or 1920x1080 on a 16:9 one"
+    else
+      p ok "DESK_SIZE ${SIZE} is within what $cores core(s) can encode"
+    fi
+    ;;
+esac

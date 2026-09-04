@@ -55,3 +55,9 @@ contains "$layout" 'Caps Lock: *on' \
 contains "$layout" 'xdotool key --clearmodifiers Caps_Lock' \
          "apply-layout clears a latched Caps Lock"
 
+
+# The framebuffer is priced on the server, so the server is what has to judge
+# it: xrdp encodes every frame in software. A doctor that cannot see DESK_SIZE
+# reports a green box that cannot draw the desktop it was asked for.
+contains "$(cat "$ROOT/remote/check.sh")" '${SIZE:-}' "check.sh reads SIZE from the environment"
+contains "$(cat "$ROOT/bin/desk-doctor")" 'SIZE=${DESK_SIZE:-' "desk-doctor sends DESK_SIZE to the server checks"

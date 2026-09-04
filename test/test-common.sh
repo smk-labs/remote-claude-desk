@@ -195,3 +195,20 @@ is "$got" "$tmp/other.sh" "the file it reports is the file it loaded"
 
 HOME="$HOME_BEFORE"
 rm -rf "$tmp"
+
+# --- the pasteboard probe must never fetch the pasteboard -------------------
+#
+# `pbio kind` is asked ten times a second, forever. It used to answer by
+# fetching the contents: imageData() pulled the whole picture out of the
+# pasteboard server, and re-encoded a PNG from TIFF when the copy was a
+# screenshot, only to throw it away and print the word "image". Ten full copies
+# a second out of one shared service is what made every other app on the Mac
+# beachball, and it survived the commit that was meant to fix it, because that
+# one only stopped the transfer and left the probe alone.
+#
+# So the guard is on the probe, not on the transfer: the kind branch may read
+# the type list and nothing else.
+kind_branch="$(awk '/^case "kind":/{f=1;next} /^case /{f=0} f' "$ROOT/mac/pbio.swift")"
+lacks "$kind_branch" "imageData()" "pbio kind does not fetch the image"
+lacks "$kind_branch" "pb.string(" "pbio kind does not fetch the text"
+contains "$(cat "$ROOT/mac/pbio.swift")" "pb.types" "pbio decides the kind from the type list"
