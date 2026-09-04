@@ -212,3 +212,32 @@ kind_branch="$(awk '/^case "kind":/{f=1;next} /^case /{f=0} f' "$ROOT/mac/pbio.s
 lacks "$kind_branch" "imageData()" "pbio kind does not fetch the image"
 lacks "$kind_branch" "pb.string(" "pbio kind does not fetch the text"
 contains "$(cat "$ROOT/mac/pbio.swift")" "pb.types" "pbio decides the kind from the type list"
+
+# --- the client must not draw through Metal ---------------------------------
+#
+# Two macOS hang reports, two days apart, two different servers, and every
+# sample of the main thread in the same place: SDL_RenderPresent, into
+# -[CAMetalLayer nextDrawable], into a semaphore that never came back. The layer
+# lends three drawables and the client takes one per flush and returns one per
+# frame, so any frame with several damaged rectangles keeps the difference.
+# Three of those and the pool is empty for good, the main thread stops, and the
+# RDP keepalive stops with it. That is the freeze, start to finish, and none of
+# it is on the far side.
+desk_src="$(cat "$ROOT/bin/desk")"
+contains "$desk_src" 'export SDL_RENDER_DRIVER=' "desk chooses SDL's renderer rather than letting it default"
+contains "$desk_src" '${DESK_RENDERER:-opengl}' "desk defaults that renderer to opengl, not metal"
+
+# --- one desk per machine, not one client per machine ------------------------
+#
+# Ending the previous CLIENT left the desk that owned it running, and that desk
+# reconnected, and the two then traded the single seat an xrdp session has for
+# as long as the laptop was on. Four of them were found alive at once, three
+# orphaned to init, each with its own clipboard bridge.
+contains "$desk_src" 'LOCK="$LOGDIR/desk-${DESK_LOCAL_PORT}.pid"' \
+         "desk takes a lock named after the machine's own port"
+contains "$desk_src" 'kill -TERM "$holder"' "desk ends the previous desk, not just its client"
+
+# --- macOS already knows why the client froze --------------------------------
+doctor_src="$(cat "$ROOT/bin/desk-doctor")"
+contains "$doctor_src" 'DiagnosticReports/sdl-freerdp*.hang' \
+         "desk-doctor reads the hang reports macOS files about the client"

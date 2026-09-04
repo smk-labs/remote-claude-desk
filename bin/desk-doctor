@@ -56,6 +56,68 @@ else
   fix "brew install freerdp"
 fi
 
+# What macOS already wrote down about the client, which nothing here used to read.
+#
+# When an app stops servicing its main thread, macOS samples it and files a
+# report under /Library/Logs/DiagnosticReports with every thread's stack in it.
+# That is the difference between "the desktop froze again, maybe the network"
+# and one line naming the function it stopped in. Two of these sat on the disk
+# for two days while the freeze was blamed on the clipboard, the scroll and the
+# server in turn.
+newest_hang="$(ls -t /Library/Logs/DiagnosticReports/sdl-freerdp*.hang 2>/dev/null | head -1)"
+if [ -n "$newest_hang" ]; then
+  hang_age=$(( ( $(date +%s) - $(stat -f %m "$newest_hang" 2>/dev/null || echo 0) ) / 86400 ))
+  # The deepest frame that is still named. The kernel rows below it are marked
+  # with a leading * and have no symbol, so they say nothing a person can act on.
+  # The deepest frame that still names a subsystem. The rows under it are the
+  # kernel and the C library's own primitives, and "semaphore_timedwait_trap" is
+  # true of every wait there has ever been, so it tells nobody anything. The
+  # frame above it does: -[CAMetalLayer nextDrawable] is a whole diagnosis.
+  hang_where="$(awk '
+      /^Heaviest stack for the main thread/ {f=1; next}
+      f && /^$/ {exit}
+      f && /^ *\*/ {next}
+      f && /libsystem_kernel|libdispatch|libsystem_platform|libsystem_pthread/ {next}
+      f {last=$0}
+      END {print last}' "$newest_hang" 2>/dev/null \
+                  | sed -E 's/^ *[0-9]+ +//; s/ \+ [0-9]+ .*//' | cut -c1-70)"
+  hang_secs="$(awk '/^Duration:/ {sub(/\..*/, "", $2); print $2; exit}' "$newest_hang" 2>/dev/null)"
+  if [ "$hang_age" -le 7 ]; then
+    warn "the client hung for ${hang_secs:-?}s on $(date -r "$newest_hang" '+%b %d'), and macOS recorded where"
+    fix "it stopped in: ${hang_where:-unknown}"
+    fix "full report: $newest_hang"
+  else
+    ok "no client hang recorded in the last 7 days (the last was ${hang_age} days ago)"
+  fi
+else
+  ok "macOS has never recorded the client hanging"
+fi
+
+# One desk per machine. Two of them fight over the single seat an xrdp session
+# has: each kills the other's client, each reconnects, and what you see is a
+# desktop that keeps disconnecting for no reason it can name.
+#
+# Counting the processes is not enough, because desk forks subshells that carry
+# its own command line, so a healthy run looks like several. A desk that matters
+# is one whose parent is not also a desk, and one of those per live pid file is
+# correct. Anything beyond that is a desk running without the lock.
+all_desks="$(pgrep -f "[b]ash .*/bin/desk$" 2>/dev/null | tr '\n' ' ')"
+held=0
+for f in "$HOME/.cache/remote-claude-desk"/desk-*.pid; do
+  [ -f "$f" ] || continue
+  kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && held=$((held + 1))
+done
+tops=0
+for pid in $all_desks; do
+  parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+  case " $all_desks " in *" $parent "*) continue ;; esac
+  tops=$((tops + 1))
+done
+if [ "$tops" -gt "$held" ]; then
+  warn "$tops desk process(es) running but only $held holding a lock, so two can fight over one session"
+  fix "desk --restart on the machine that is misbehaving"
+fi
+
 # sdl-freerdp and not xfreerdp is deliberate: xfreerdp needs XQuartz.
 command -v xfreerdp >/dev/null 2>&1 && [ ! -x "$(command -v sdl-freerdp 2>/dev/null)" ] \
   && warn "only xfreerdp is present, which needs XQuartz; sdl-freerdp does not"

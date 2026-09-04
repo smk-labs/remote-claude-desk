@@ -48,6 +48,7 @@ Per-run knobs, all optional:
   DESK_SPACES=0           no separate macOS Space, so no launch flash
   DESK_GFX=1              try the EGFX codec
   DESK_GDI=sw             software rendering
+  DESK_RENDERER=metal     draw with Metal again (it deadlocks; see the comment)
   RDP_TUNE=1              bandwidth-saving flags
 
 Settings that belong to the machine, not the run, live in config.sh.
@@ -95,6 +96,46 @@ fi
 desk_log() { echo "$*" >> "$LOG"; }
 
 desk_log "master: bringing up"
+
+# ─── one desk at a time, not just one client ─────────────────────────────────
+#
+# The guard below used to end the previous CLIENT and stop there, which left the
+# `desk` that owned it alive. That desk then did exactly what it is built to do:
+# it saw its client gone and the tunnel down, and reconnected. So the new desk
+# killed the old desk's client, the old desk started another one, and the two
+# traded the session between them for as long as the laptop was on.
+#
+# Measured, on the morning this was found: four `desk` processes two hours old,
+# three of them orphaned to init, each running its own clipboard bridge, so the
+# pasteboard was being polled forty times a second instead of ten, and every
+# client either of them opened was logged off within seconds by the other. From
+# the outside that is not a fight, it is "the desktop keeps crashing".
+#
+# A pid file rather than a process name, because every desk has the same command
+# line and the machine it belongs to is only in its config. One file per local
+# port is therefore one file per machine, which is what lets two boxes run side
+# by side and still keeps one desk each.
+LOCK="$LOGDIR/desk-${DESK_LOCAL_PORT}.pid"
+_lock_holder() {
+  local pid
+  pid="$(cat "$LOCK" 2>/dev/null)"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$pid" != "$$" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  printf %s "$pid"
+}
+
+if holder="$(_lock_holder)"; then
+  desk_say "another desk for this machine is running (pid $holder), ending it first."
+  # TERM, not KILL: desk traps it and runs cleanup, which is what stops its
+  # bridge and its remote agent. KILL would leave both behind.
+  kill -TERM "$holder" 2>/dev/null || true
+  _holder_gone() { ! kill -0 "$holder" 2>/dev/null; }
+  desk_retry 10 1 1 -- _holder_gone \
+    || desk_warn "the previous desk (pid $holder) would not exit; expect the two to fight."
+fi
+echo $$ > "$LOCK"
+
 # ─── one client at a time ────────────────────────────────────────────────────
 # An xrdp session is single seat. A second client does not join it, it TAKES it,
 # and the client it displaced tries to take it back: FreeRDP auto-reconnects on
@@ -148,8 +189,35 @@ ARGS=( "${DESK_ARGS[@]}" )
 #   0           stays on the current desktop. No flash, but no Space either.
 export SDL_VIDEO_MAC_FULLSCREEN_SPACES="${DESK_SPACES:-1}"
 
+# Which renderer SDL draws with, and the single most important line in this file.
+#
+# The freeze was never the server, the clipboard or the network. macOS had
+# already written down what it was, twice, and nothing here was reading it:
+# /Library/Logs/DiagnosticReports/sdl-freerdp-*.hang, 37 seconds on one day and
+# 146 on the next, every sample of the main thread in the same place.
+#
+#   SdlContext::drawToWindows -> drawToWindow -> SDL_RenderPresent
+#     -> METAL_ActivateRenderCommandEncoder
+#       -> -[CAMetalLayer nextDrawable]
+#         -> _dispatch_semaphore_wait_slow          <- stuck here
+#
+# A CAMetalLayer hands out three drawables and blocks until one comes back. The
+# client asks for one per flush and presents one per frame, so any frame that
+# flushes more than once, which is any frame with several damaged rectangles,
+# leaks the extras. Three of those and the pool is empty for good. Scrolling is
+# what produces damaged rectangles by the dozen, which is why it always felt
+# like the scroll, and it is also why the window dies rather than slows: the
+# main thread stops, so the RDP keepalive stops with it and the link times out.
+# Nothing about the far side is involved, which is why both machines did it.
+#
+# So do not draw through Metal. SDL's OpenGL renderer has no drawable pool and
+# no such wait, and on this hardware it costs nothing measurable. Metal is still
+# one word away for anyone who wants to check whether a newer SDL has fixed it.
+export SDL_RENDER_DRIVER="${DESK_RENDERER:-opengl}"
+
 desk_say "log: $LOG"
 desk_log "args: ${ARGS[*]}"
+desk_log "renderer: $SDL_RENDER_DRIVER"
 
 # ─── helpers that live exactly as long as the client ─────────────────────────
 HELPERS=()
@@ -158,6 +226,9 @@ cleanup() {
   local p
   for p in "${HELPERS[@]:-}"; do kill "$p" 2>/dev/null || true; done
   HELPERS=()
+  # Only if it is still ours. A desk that took the lock from us has already
+  # written its own pid here, and removing that would let a third one in.
+  [ -n "${LOCK:-}" ] && [ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"
   # Belt and braces, in case a helper died without cleaning up after itself.
   # desk_remote_pkill brackets the pattern so it cannot match the ssh shell
   # that is running it, which used to kill the cleanup halfway through.
