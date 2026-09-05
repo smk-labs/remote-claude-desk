@@ -249,6 +249,81 @@ The rule both of these land on: when a working reference exists, read it, and
 diff against it. Not "does the new box work", but "what does the old box have
 that this one does not".
 
+## Trap 11: macOS had already written down why the window froze
+
+Two `.hang` reports sat in `/Library/Logs/DiagnosticReports` for two days while
+the freeze was blamed on the clipboard, the scroll, the server and the network
+in turn. Nothing here read them.
+
+- 37 seconds on one day, 146 on the next, on two different servers
+- every sample of the main thread in the same five frames: `SDL_RenderPresent`,
+  `METAL_ActivateRenderCommandEncoder`, `-[CAMetalLayer nextDrawable]`,
+  `_dispatch_semaphore_wait_slow`
+- a CAMetalLayer lends three drawables and blocks until one comes back
+- moving to the OpenGL renderer did not fix it, it only changed which function
+  waited: `CGLFlushDrawable` instead, in the same place in the same loop
+- the client draws on the thread that reads input, so a burst of updates starves
+  the event queue: the picture keeps arriving and the pointer stops
+
+`desk-doctor` reads those reports now and prints the deepest named frame, since
+"semaphore_timedwait_trap" is true of every wait there has ever been.
+
+## Trap 12: a starved client looks exactly like a deadlocked one
+
+A whole round of testing was run against a client at `nice 5`, launched from a
+background shell, and its freezes were attributed to the renderer.
+
+- a niced client does not crash and does not log, it falls behind
+- macOS labels the window Not Responding either way
+- the tell is the hang report: a real deadlock always leaves one, starvation
+  leaves none
+- nothing can lower a nice value without root, so the fix is to launch from
+  somewhere that is not niced
+
+## Trap 13: tuning the size of a thing whose count is the problem
+
+Three separate attempts changed how far each scroll event should move, and all
+three did nothing, because the driver on the far side never read that number.
+
+- the macOS scroll-speed slider: no effect, and that result was disbelieved
+- a per-app scroll tool set to 1 pixel and then to 1000: identical behaviour,
+  which is the same evidence again and was disbelieved again
+- only then was it measured, with a passive grab on the root window that replayed
+  every event so scrolling behaved normally while it recorded
+
+The measurement ended the argument in nine seconds: 233 wheel events over five
+gestures, **median 46 per gesture**, 138 a second, 7 ms apart. A real mouse wheel
+sends three to ten. Every earlier attempt had been adjusting the wrong axis.
+
+## Trap 14: one version short on both halves
+
+xorgxrdp before 0.10 emits a full wheel click per RDP packet instead of
+accumulating the delta and emitting one per 120 units. The box was on the last
+broken pair, xrdp 0.9.24 with xorgxrdp 0.9.19, and Ubuntu 24.04 ships no newer
+one. Ubuntu 25.04's pair, xrdp 0.10.1 with xorgxrdp 0.10.2, installs cleanly on
+noble: every dependency resolves and the Xorg ABIs match.
+
+The upgrade then broke every login, and the client's words for it were "No X
+displays are available", which sounds like the box is full. The server was exact:
+
+    X server -- no display in range (150 to 63) is available
+
+xrdp 0.10 added `MaxDisplayNumber`, default 63, and this server puts displays at
+150 to stay clear of the other tenants. Raise the ceiling; do not lower the
+offset, which would trade one fault for a worse one.
+
+## Trap 15: ending the client is not ending the desk
+
+The "one client at a time" guard killed the previous CLIENT and left the `desk`
+that owned it running. That desk then reconnected, killed the new client, and
+the two traded the single seat an xrdp session has for as long as the laptop was
+on. Four were found alive at once, three orphaned to init, each polling the
+pasteboard ten times a second.
+
+- one pid file per local port, which is one per machine
+- release it on the exit trap, never in `cleanup`, which the reconnect loop
+  calls after every client
+
 ## Three more mistakes worth not repeating
 
 Each of these looked like a different bug than it was.
@@ -303,6 +378,14 @@ remembered.
   writable config someone else's shell
 
 ## What is not verified
+
+- **The scroll fix was confirmed by feel, not by a second measurement.** The
+  before number is solid: 233 wheel events over five gestures, median 46, on
+  xorgxrdp 0.9.19. After the upgrade the same probe was armed twice and caught
+  no gestures, because by then the desktop was in use rather than under test.
+  What is recorded is the user's own verdict that scrolling became normal, plus
+  the version change and the upstream description of what it does. The number
+  itself is still worth taking, and the probe is `remote/scroll-probe.py`.
 
 Stated plainly, because the rest of this page is not.
 
