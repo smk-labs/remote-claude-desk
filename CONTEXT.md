@@ -26,6 +26,11 @@ having similar names and completely different lifetimes.
   only, through `desk_remote_run`, which sends the file over the master and
   passes values as environment assignments in front of the interpreter. They
   used to be text inside the commands, where no parser could read them.
+- **The lock** is `desk-<local port>.pid` in the cache directory, one per
+  machine, holding the pid of the desk that owns that machine. It is what makes
+  two desks side by side normal and two desks on one machine impossible. An
+  xrdp session has one seat, so two clients on it take it from each other
+  forever; two different machines share nothing and run happily at once.
 - **An orphan** is a session whose `xrdp-sesman` was restarted underneath it.
   The desktop keeps running but nothing tracks it any more, and every later
   connect makes a new session that dies at once.
@@ -39,6 +44,7 @@ thing whose lifetime you guessed wrong.
 |---|---|
 | The client | you close the window |
 | The bridge | the client exits (`desk` stops it) |
+| The lock | the desk holding it exits, or another desk takes the machine |
 | The master | it is idle past `ControlPersist`, or you kill it |
 | The session | the server reboots |
 | An orphan | something kills it by hand |

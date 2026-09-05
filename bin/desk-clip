@@ -54,6 +54,13 @@ import time
 # on the pasteboard was invisible to the bridge and could not cross.
 PBIO = os.path.join(os.path.dirname(os.path.realpath(__file__)), "desk-pbio")
 
+# argv is not read for settings, and that is deliberate. `desk` passes
+# "--for <host>:<port>" purely so that two bridges, one per machine, can be told
+# apart in `ps`. Nothing here parses it: the settings all arrive in the
+# environment, which is what main() checks for. Without the marker, the only way
+# to end one machine's bridge was `pkill -f desk-clip`, which ended the other
+# machine's as well and left it running with a clipboard that had silently
+# stopped crossing.
 HOST = os.environ.get("DESK_HOST", "")
 SOCKET = os.environ.get("DESK_SSH_SOCKET", "")
 DISPLAY = os.environ.get("DESK_DISPLAY", "")

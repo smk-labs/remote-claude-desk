@@ -253,3 +253,28 @@ cleanup_body="$(awk '/^cleanup\(\) \{/{f=1} f{print} /^\}/{if(f) exit}' "$ROOT/b
 lacks "$cleanup_body" 'rm -f "$LOCK"' "cleanup does not release the lock"
 contains "$desk_src" "trap 'cleanup; _release_lock' EXIT INT TERM" \
          "the lock is released by the exit trap instead"
+
+# --- a raised nice level is named, because desk cannot fix it ----------------
+#
+# A client started from a background context runs niced, falls behind under
+# load, and gets labelled Not Responding by macOS, which looks exactly like the
+# Metal deadlock and is not it. Lowering a nice value needs root, so the only
+# honest thing desk can do is say so at the top of the run. This cost a full
+# round of testing: a client at nice 5 for hours, its freezes blamed on the
+# renderer, the server and the clipboard in turn.
+contains "$desk_src" 'ps -o nice= -p $$' "desk checks the priority it was started at"
+contains "$doctor_src" 'the client is running at nice' "desk-doctor reports the client's priority"
+
+# --- two desks, two machines, side by side ----------------------------------
+#
+# Everything that ends something must name the machine it belongs to, or one
+# desk's restart reaches into the other's session. The client kill was already
+# scoped by port; the bridge was not, so `desk --restart` on one box killed the
+# other box's clipboard and left it running with text that silently stopped
+# crossing. desk-clip does not read the marker, it just carries it so ps can
+# tell the two apart.
+contains "$desk_src" '"$BIN/desk-clip" --for "$DESK_HOST:$DESK_LOCAL_PORT"' \
+         "each bridge carries the machine it belongs to"
+contains "$desk_src" 'pkill -f "[d]esk-clip --for .*:${DESK_LOCAL_PORT}' \
+         "--restart ends only this machine's bridge"
+lacks "$desk_src" 'pkill -f "[d]esk-clip" ' "--restart no longer kills every bridge"

@@ -80,7 +80,10 @@ fi
 if [ "${1:-}" = "--restart" ]; then
   desk_say "restarting from scratch."
   pkill -f "[s]dl-freerdp /v:127.0.0.1:${DESK_LOCAL_PORT}" 2>/dev/null
-  pkill -f "[d]esk-clip" 2>/dev/null
+  # Scoped to this machine. It used to be a bare "desk-clip", so restarting one
+  # desk silently killed the other desk's clipboard bridge and left that session
+  # running with text that no longer crossed and nothing to say why.
+  pkill -f "[d]esk-clip --for .*:${DESK_LOCAL_PORT}\$" 2>/dev/null
   ssh -S "$DESK_SSH_SOCKET" -O exit "$DESK_HOST" 2>/dev/null
   # The remote half too, so a stale bridge is not left owning the clipboard.
   desk_remote_pkill "deskclip-agent" 2>/dev/null || true
@@ -96,6 +99,32 @@ fi
 desk_log() { echo "$*" >> "$LOG"; }
 
 desk_log "master: bringing up"
+
+# ─── the priority this was started at, which desk cannot fix and must not hide ─
+#
+# A remote desktop is the most latency-sensitive thing on the machine: it repaints
+# in response to the pointer, and everything it draws arrives over a wire first.
+# Started from a background context, it inherits that context's scheduling class,
+# and a niced client under load does not crash or log anything. It just stops
+# keeping up, and macOS labels the window Not Responding, which reads exactly
+# like the deadlock this file spent a day chasing.
+#
+# It cost a whole round of testing here: a client launched from a background
+# shell ran at nice 5 for hours while its freezes were being blamed on the
+# renderer, the server and the clipboard in turn.
+#
+# desk cannot correct it. Lowering a nice value needs root, and the fix is not to
+# ask for root, it is to launch from somewhere that is not niced: the menu bar
+# app, or a terminal. So say it, once, at the top, where the person who typed the
+# command is still looking.
+_nice="$(ps -o nice= -p $$ 2>/dev/null | tr -d ' ')"
+case "$_nice" in
+  ''|0|-*) ;;
+  *) desk_warn "this desk is running at nice $_nice, so the client will be starved under load."
+     desk_warn "  Nothing here can lower it: that needs root. Start desk from the menu bar app"
+     desk_warn "  or a normal terminal instead, and it will run at nice 0."
+     desk_log "nice: $_nice (raised; the client will be starved)" ;;
+esac
 
 # ─── one desk at a time, not just one client ─────────────────────────────────
 #
@@ -302,7 +331,10 @@ session_helper() {
   # session with no clipboard at all and not one word about why. Say it instead.
   if [ "${DESK_CLIP:-bridge}" != "rdp" ]; then
     if [ -x "$BIN/desk-clip" ]; then
-      DESK_DISPLAY="$display" "$BIN/desk-clip" &
+      # The marker is for `ps`, not for desk-clip, which reads none of it. It is
+      # what lets --restart end this machine's bridge and leave the other
+      # machine's alone.
+      DESK_DISPLAY="$display" "$BIN/desk-clip" --for "$DESK_HOST:$DESK_LOCAL_PORT" &
       kids+=($!)
     else
       desk_warn "clipboard: desk-clip is not at $BIN/desk-clip, so text will NOT cross."

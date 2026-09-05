@@ -118,6 +118,21 @@ if [ "$tops" -gt "$held" ]; then
   fix "desk --restart on the machine that is misbehaving"
 fi
 
+# The scheduling class the client actually got.
+#
+# A niced client does not fail, it falls behind, and a window that falls behind
+# is labelled Not Responding by macOS, which is indistinguishable from a real
+# deadlock until you look at this number. Whatever started desk decides it, and
+# nothing but root can change it afterwards.
+for _c in $(pgrep -f "[s]dl-freerdp /v:127.0.0.1:" 2>/dev/null); do
+  _n="$(ps -o nice= -p "$_c" 2>/dev/null | tr -d ' ')"
+  case "$_n" in
+    ''|0|-*) ok "the client is running at normal priority (nice ${_n:-0})" ;;
+    *) warn "the client is running at nice $_n, so it will be starved under load"
+       fix "quit it and start desk from the menu bar app or a terminal; root is needed to lower it" ;;
+  esac
+done
+
 # sdl-freerdp and not xfreerdp is deliberate: xfreerdp needs XQuartz.
 command -v xfreerdp >/dev/null 2>&1 && [ ! -x "$(command -v sdl-freerdp 2>/dev/null)" ] \
   && warn "only xfreerdp is present, which needs XQuartz; sdl-freerdp does not"
