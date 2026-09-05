@@ -76,3 +76,11 @@ contains "$(cat "$ROOT/bin/desk-doctor")" 'SIZE=${DESK_SIZE:-' "desk-doctor send
 check_src="$(cat "$ROOT/remote/check.sh")"
 contains "$check_src" 'xorgxrdp_v="$(dpkg-query -W' "check.sh reads the xorgxrdp version"
 contains "$check_src" 'MaxDisplayNumber' "check.sh compares the display offset against the cap"
+
+# The clipboard image shim. xrdp hands X an image as image/bmp and nothing else,
+# and Chromium, Electron and GTK all ask for image/png, so a paste looks like
+# nothing happening. It converts and re-offers, and it cannot feed itself
+# because PNG replaces the BMP rather than joining it.
+clip_png="$(cat "$ROOT/remote/clip-png.sh")"
+contains "$clip_png" 'image/bmp' "clip-png reads the BMP xrdp actually offers"
+contains "$clip_png" 'xclip -selection clipboard -t image/png -i' "clip-png re-offers it as PNG"
