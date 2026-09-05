@@ -52,7 +52,7 @@ desk_resolve() {
 #
 # `desk-clip` is deliberately absent. It is found next to `desk` rather than
 # called by name, so putting it on PATH would suggest it is meant to be typed.
-DESK_COMMANDS="desk desk-doctor desk-setup desk-tunnel"
+DESK_COMMANDS="desk-doctor desk-setup desk-tunnel"
 
 # Load config.sh, from the user's config dir first so a clone can stay pristine.
 # Exits with instructions rather than running against the example values, which

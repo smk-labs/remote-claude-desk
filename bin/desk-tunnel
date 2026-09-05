@@ -98,6 +98,22 @@ USAGE
 esac
 
 desk_ensure_master
+
+# Heal an orphaned session before forwarding, not after.
+#
+# A session that outlived its sesman is untracked forever, and every later
+# connect makes a new one that dies at once with ERRINFO_LOGOFF_BY_USER, which
+# reads like a network fault and is not one. The why is in
+# remote/heal-orphans.sh, beside the code that does it.
+#
+# This used to be `desk`'s preflight and was its only caller. desk-tunnel is the
+# right home for it now: it runs before every connection and, once the
+# LaunchAgent is installed, again every five minutes, so an orphan created while
+# the laptop was shut is cleared before anyone notices it.
+#
+# Best effort: a server that cannot be healed is still worth trying to reach.
+desk_remote_run heal-orphans.sh >/dev/null 2>&1 || true
+
 desk_forward
 
 # The layout needs a session to push into, and with a native client the session

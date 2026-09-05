@@ -84,3 +84,9 @@ contains "$check_src" 'MaxDisplayNumber' "check.sh compares the display offset a
 clip_png="$(cat "$ROOT/remote/clip-png.sh")"
 contains "$clip_png" 'image/bmp' "clip-png reads the BMP xrdp actually offers"
 contains "$clip_png" 'xclip -selection clipboard -t image/png -i' "clip-png re-offers it as PNG"
+
+# heal-orphans must keep a caller. It had exactly one, bin/desk, and losing it
+# silently would leave remote/check.sh still printing "desk heals this
+# automatically on the next run" about something that no longer runs.
+contains "$(cat "$ROOT/bin/desk-tunnel")" 'desk_remote_run heal-orphans.sh' \
+         "desk-tunnel heals orphaned sessions"
