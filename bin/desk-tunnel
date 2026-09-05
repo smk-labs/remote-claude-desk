@@ -30,6 +30,11 @@ ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
 
 desk_load_config "$ROOT"
 
+# The folder the RDP client redirects. bin/desk used to create it and nothing
+# did after that was deleted, so desk-doctor's "desk-tunnel creates it" was a
+# promise no code kept.
+mkdir -p "$DESK_SHARE"
+
 AGENT_DIR="$HOME/Library/LaunchAgents"
 AGENT_LABEL="com.smk-labs.desk-tunnel.$DESK_HOST"
 AGENT_PLIST="$AGENT_DIR/$AGENT_LABEL.plist"
@@ -85,7 +90,7 @@ desk-tunnel              forward the port and push the keyboard layout, once
 desk-tunnel --install    do that at login and every 5 minutes, for this machine
 desk-tunnel --uninstall  stop doing that
 
-Which machine is decided by DESK_CONFIG, exactly as it is for desk.
+Which machine is decided by DESK_CONFIG, the same way desk-doctor decides.
 USAGE
     exit 0
     ;;

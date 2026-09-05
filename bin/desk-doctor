@@ -95,7 +95,7 @@ fi
 
 case ":$PATH:" in
   *":$HOME/bin:"*) ok "~/bin is on PATH" ;;
-  *) warn "~/bin is not on PATH, so 'desk' will not resolve"
+  *) warn "~/bin is not on PATH, so 'desk-tunnel' will not resolve"
      fix "add to your shell profile:  export PATH=\"\$HOME/bin:\$PATH\"" ;;
 esac
 
@@ -121,7 +121,7 @@ done
 
 [ -d "$DESK_SHARE" ] \
   && ok "shared folder $DESK_SHARE" \
-  || warn "shared folder $DESK_SHARE does not exist yet (desk creates it)"
+  || warn "shared folder $DESK_SHARE does not exist yet (desk-tunnel creates it)"
 
 
 if [ -d "$HOME/.config/karabiner" ]; then
@@ -165,7 +165,7 @@ else
   if desk_master_up; then
     ok "SSH master is up"
   else
-    warn "SSH master is down (desk brings it up on its own)"
+    warn "SSH master is down (desk-tunnel brings it up on its own)"
     # If a keepalive helper left a reason, show it. A background helper that
     # fails silently is how a dead connection stays unnoticed until the moment
     # it is needed.

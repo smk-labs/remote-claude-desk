@@ -175,3 +175,24 @@ for cmd in "$ROOT"/bin/*; do
   contains "$src" '. "$ROOT/lib/common.sh"' "$name sources the library"
   contains "$src" 'desk_load_config "$ROOT"' "$name loads the config"
 done
+
+# --- nothing user-facing may name a command that was deleted ------------------
+#
+# Found by running `desk-tunnel --help`, not by reading it: the last line still
+# said "exactly as it is for desk". Every grep in this suite had passed, because
+# they all look for what should be present and none looked for what should not.
+for cmd in "$ROOT"/bin/*; do
+  name="$(basename "$cmd")"
+  # Comments are stripped first. A comment saying what `desk` used to do is the
+  # house style and the reason half this repo is readable; a STRING that tells
+  # someone to run it is a lie. Only the second kind is a bug.
+  #
+  # A bare "desk" with no hyphen after it, so desk-doctor and desk-tunnel pass,
+  # and so do DESK_ variables and the repo's own name.
+  #
+  # No `|| echo 0` either: grep -c always prints a count and exits 1 when that
+  # count is zero, so a fallback would fire on success and make the value "0\n0".
+  hits="$(grep -v '^[[:space:]]*#' "$cmd" \
+          | grep -cE '(^|[^-a-zA-Z_/])desk([^-a-zA-Z_]|$)')"
+  is "$hits" "0" "$name names no deleted command"
+done
