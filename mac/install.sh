@@ -150,58 +150,23 @@ esac
 desk_say ""
 
 # ---------------------------------------------------------------------------
-# 3. the clipboard image cap
-# ---------------------------------------------------------------------------
+desk_say "3. The pasteboard helper"
 
-desk_say "3. Clipboard image cap"
-
-# Why this is not optional. A macOS screenshot to the clipboard, taken while
-# connected, wedges the RDP clipboard channel: the image never pastes, text
-# stops crossing with it, and the connection cannot be re-established until the
-# client is fully quit. It happens against real Windows servers too, so it is
-# the client's clipboard handling, not xrdp and not the tunnel.
-#
-# RDP carries images as CF_DIB, which is uncompressed, so a 2560x1600 Retina
-# grab is 15.6 MB on the wire whatever the PNG weighed. The 68x56 image that
-# crossed fine earlier was 0.015 MB. clipshrink caps the pixel count, and only
-# while an RDP client is running, so nothing else on the Mac notices.
-CLIPSHRINK_SRC="$ROOT/mac/clipshrink.swift"
-CLIPSHRINK_OUT="$ROOT/bin/desk-clipshrink"
-CLIPSHRINK_LABEL="com.smk-labs.desk-clipshrink"
-CLIPSHRINK_PLIST="$HOME/Library/LaunchAgents/$CLIPSHRINK_LABEL.plist"
-
+# desk-clip reads the Mac pasteboard through this rather than through pbpaste,
+# which speaks text only, so an image would be invisible to the bridge. pbpaste
+# also takes its encoding from the environment, which is how a Persian copy came
+# back as MacRoman (docs/lessons.md, trap 2).
+PBIO_SRC="$ROOT/mac/pbio.swift"
+PBIO_OUT="$ROOT/bin/desk-pbio"
 if ! command -v swiftc >/dev/null 2>&1; then
-  desk_say "   NOTE    swiftc is not here, so the clipboard cap cannot be built."
-  desk_say "           Install the Xcode command line tools: xcode-select --install"
-elif [ -x "$CLIPSHRINK_OUT" ] && [ "$CLIPSHRINK_OUT" -nt "$CLIPSHRINK_SRC" ]; then
-  desk_say "   ok      $CLIPSHRINK_OUT is already built"
-elif swiftc -O -o "$CLIPSHRINK_OUT" "$CLIPSHRINK_SRC" 2>/dev/null; then
-  desk_say "   built   $CLIPSHRINK_OUT"
+  desk_say "   NOTE    swiftc is not here, so images will not cross. Install the"
+  desk_say "           Xcode command line tools:  xcode-select --install"
+elif [ -x "$PBIO_OUT" ] && [ "$PBIO_OUT" -nt "$PBIO_SRC" ]; then
+  desk_say "   ok      $PBIO_OUT is already built"
+elif swiftc -O -o "$PBIO_OUT" "$PBIO_SRC" 2>/dev/null; then
+  desk_say "   built   $PBIO_OUT"
 else
-  desk_say "   MISSING $CLIPSHRINK_OUT would not build; screenshots will keep wedging"
-fi
-
-if [ -x "$CLIPSHRINK_OUT" ]; then
-  mkdir -p "$HOME/Library/LaunchAgents" "$HOME/.cache/remote-claude-desk"
-  cat > "$CLIPSHRINK_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>$CLIPSHRINK_LABEL</string>
-  <key>ProgramArguments</key><array><string>$CLIPSHRINK_OUT</string></array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardErrorPath</key><string>$HOME/.cache/remote-claude-desk/clipshrink.log</string>
-</dict>
-</plist>
-PLIST
-  launchctl bootout "gui/$(id -u)/$CLIPSHRINK_LABEL" 2>/dev/null || true
-  if launchctl bootstrap "gui/$(id -u)" "$CLIPSHRINK_PLIST" 2>/dev/null; then
-    desk_say "   loaded  $CLIPSHRINK_LABEL (runs at login, watches only while an RDP client is up)"
-  else
-    desk_say "   WARN    could not load $CLIPSHRINK_PLIST"
-  fi
+  desk_say "   MISSING $PBIO_OUT would not build, so images will not cross"
 fi
 desk_say ""
 
