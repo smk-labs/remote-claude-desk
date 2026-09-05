@@ -502,6 +502,39 @@ images, entirely outside the RDP channel. A wedge there costs the clipboard and
 nothing else, because the thing that draws the screen is not in the path. It is
 in git history if it is ever wanted back.
 
+## Trap 18: a rename breaks more than the account, and some of it is named after the path
+
+`usermod -l mo -d /home/mo -m moe` moves the home directory and updates
+`/etc/passwd`. It does not update anything that wrote the old path down, and on
+a working desktop that is a lot.
+
+**What broke, in the order it was noticed.** The Claude launcher refused to
+start with "this launcher belongs to moe, you are mo": it had both the old path
+and an owner check baked in. Three systemd user units pointed their
+`StandardOutput=append:` at the old home, which fails as `209/STDOUT` and reads
+like the program crashed rather than like a path problem. The XFCE panel and
+desktop icon layouts named it too.
+
+**The part that would have quietly lost work.** Claude Code stores per-project
+history in a directory whose NAME is the project path with slashes turned into
+hyphens: `-home-moe-Projects`. After the rename it looks for `-home-mo-Projects`,
+finds nothing, and starts empty. The conversations are not gone, they are
+filed under a name nothing asks for any more. Renaming the directories put them
+back. Nothing warns about this, and it is invisible until you go looking for an
+old session.
+
+**Not everything can be repaired with sed.** Chromium's LevelDB and IndexedDB
+stores under the profile contain the old path too, and they are binary: a sed
+through one corrupts the store. They were left alone, they re-derive what they
+need, and the difference between "config" and "state" is the line to hold. Logs
+were left alone for the same reason in reverse: they are a record of what
+happened, and rewriting them destroys the only account of it.
+
+**The order that works.** Stop the automation first (trap 16), then rename, then
+repair paths in this order: the launcher, the units, the path-named directories,
+and last the cosmetic ones. Back up before the first sed. Verify by RUNNING the
+launcher, not by grepping it, which is how the owner check was found at all.
+
 ## What is not verified
 
 - **The scroll fix was confirmed by feel, not by a second measurement.** The
