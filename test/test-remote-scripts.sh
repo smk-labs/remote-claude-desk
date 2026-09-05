@@ -90,3 +90,9 @@ contains "$clip_png" 'xclip -selection clipboard -t image/png -i' "clip-png re-o
 # automatically on the next run" about something that no longer runs.
 contains "$(cat "$ROOT/bin/desk-tunnel")" 'desk_remote_run heal-orphans.sh' \
          "desk-tunnel heals orphaned sessions"
+
+# The clipboard channel must be checked, not assumed. It is the one setting that
+# decides whether a screenshot deadlocks the client, and it lives on the server
+# where no amount of Mac-side care can reach it.
+contains "$(cat "$ROOT/remote/check.sh")" 'cliprdr=false' "check.sh verifies the RDP clipboard channel is off"
+contains "$(cat "$ROOT/server/install.sh")" 'Channels cliprdr false' "server/install.sh turns the channel off"

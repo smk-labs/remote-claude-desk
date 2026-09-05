@@ -140,6 +140,19 @@ if [ -n "$found" ]; then
   fi
 fi
 
+# The clipboard channel, which must be OFF.
+#
+# With it on, a macOS screenshot taken while connected deadlocks Windows App:
+# the clipboard stops carrying anything, the session will not reopen, and only
+# quitting the app clears it. The bridge carries the clipboard instead, and two
+# owners of the X CLIPBOARD selection race each other anyway.
+if grep -qE "^cliprdr=false" /etc/xrdp/xrdp.ini 2>/dev/null; then
+  p ok "the RDP clipboard channel is off, so the client cannot deadlock on an image"
+else
+  p bad "the RDP clipboard channel is ON, so a screenshot will deadlock the client"
+  f "set cliprdr=false in the [Channels] section of /etc/xrdp/xrdp.ini"
+fi
+
 # The two session helpers. Both are silent when absent, which is the whole
 # problem: the clipboard simply stops carrying images and the keyboard simply
 # comes up as plain "us", and neither says a word about why.

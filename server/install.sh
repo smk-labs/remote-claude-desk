@@ -298,6 +298,29 @@ else
   skip "sesman.ini Policy is already UBI"
 fi
 
+# The RDP clipboard channel, off on purpose.
+#
+# It is not a downgrade, it is the fix for a client bug we cannot reach. Windows
+# App deadlocks when an image lands on the Mac pasteboard while it is redirecting
+# the clipboard toward the remote side: a screenshot is enough, and afterwards
+# the clipboard carries nothing, the session it just closed refuses to reopen,
+# and only quitting the whole app clears it. Reported since early 2026,
+# unacknowledged, still there in 11.4.0, and reproduced against real Windows
+# hosts, so it is neither xrdp's nor ours to fix.
+#
+# Turning the channel off here rather than in the client is deliberate. A
+# checkbox on one Mac protects one Mac; the server protects every client that
+# ever connects, including the next one, and it cannot be un-ticked by accident.
+# desk-clip carries text and images both ways over SSH instead, where the client
+# is not involved and has nothing to deadlock, and it leaves the X CLIPBOARD
+# selection with a single owner rather than racing xrdp-chansrv for it.
+if ini_set /etc/xrdp/xrdp.ini Channels cliprdr false; then
+  did "xrdp.ini cliprdr=false (desk-clip carries the clipboard instead)"
+  NEEDS_XRDP_RESTART=1
+else
+  skip "xrdp.ini cliprdr is already false"
+fi
+
 # ─── 3. lock the listener to one uid ─────────────────────────────────────────
 # The loopback address is reachable by every account on a shared box. This rule
 # rejects any connection to it that is not owned by the desktop user, so a
