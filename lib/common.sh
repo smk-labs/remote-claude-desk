@@ -52,7 +52,7 @@ desk_resolve() {
 #
 # `desk-clip` is deliberately absent. It is found next to `desk` rather than
 # called by name, so putting it on PATH would suggest it is meant to be typed.
-DESK_COMMANDS="desk-doctor desk-setup desk-tunnel"
+DESK_COMMANDS="desk-doctor desk-tunnel"
 
 # Load config.sh, from the user's config dir first so a clone can stay pristine.
 # Exits with instructions rather than running against the example values, which
@@ -117,7 +117,6 @@ desk_load_config() {
   : "${DESK_LAYOUTS:=us}"
   : "${DESK_LAYOUT_TOGGLE:=grp:alt_shift_toggle}"
   : "${DESK_SHARE:=$HOME/RemoteShare}"
-  : "${DESK_KEYCHAIN_SERVICE:=remote-claude-desk}"
   : "${DESK_CONNECT_CMD:=}"
   : "${DESK_SSH_SOCKET:=$HOME/.ssh/ctrl-$DESK_HOST}"
 

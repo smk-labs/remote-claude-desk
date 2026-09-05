@@ -49,12 +49,6 @@ ok "host '$DESK_HOST', user '$DESK_USER', listener $DESK_RDP_ADDR:$DESK_RDP_PORT
 # ─── the Mac side ────────────────────────────────────────────────────────────
 head_ "This Mac"
 
-if command -v sdl-freerdp >/dev/null 2>&1; then
-  ok "sdl-freerdp: $(sdl-freerdp /version 2>/dev/null | head -1 | cut -c1-60)"
-else
-  bad "sdl-freerdp is not on PATH"
-  fix "brew install freerdp"
-fi
 
 # What macOS already wrote down about the client, which nothing here used to read.
 #
@@ -64,11 +58,13 @@ fi
 # and one line naming the function it stopped in. Two of these sat on the disk
 # for two days while the freeze was blamed on the clipboard, the scroll and the
 # server in turn.
-newest_hang="$(ls -t /Library/Logs/DiagnosticReports/sdl-freerdp*.hang 2>/dev/null | head -1)"
+# Both clients, because the lesson is about the reports and not about FreeRDP:
+# whichever one is drawing the screen, macOS files the same thing under its own
+# name when it stops answering.
+newest_hang="$(ls -t /Library/Logs/DiagnosticReports/sdl-freerdp*.hang \
+                     "/Library/Logs/DiagnosticReports/Windows App"*.hang 2>/dev/null | head -1)"
 if [ -n "$newest_hang" ]; then
   hang_age=$(( ( $(date +%s) - $(stat -f %m "$newest_hang" 2>/dev/null || echo 0) ) / 86400 ))
-  # The deepest frame that is still named. The kernel rows below it are marked
-  # with a leading * and have no symbol, so they say nothing a person can act on.
   # The deepest frame that still names a subsystem. The rows under it are the
   # kernel and the C library's own primitives, and "semaphore_timedwait_trap" is
   # true of every wait there has ever been, so it tells nobody anything. The
@@ -118,28 +114,8 @@ if [ "$tops" -gt "$held" ]; then
   fix "desk --restart on the machine that is misbehaving"
 fi
 
-# The scheduling class the client actually got.
-#
-# A niced client does not fail, it falls behind, and a window that falls behind
-# is labelled Not Responding by macOS, which is indistinguishable from a real
-# deadlock until you look at this number. Whatever started desk decides it, and
-# nothing but root can change it afterwards.
-for _c in $(pgrep -f "[s]dl-freerdp /v:127.0.0.1:" 2>/dev/null); do
-  _n="$(ps -o nice= -p "$_c" 2>/dev/null | tr -d ' ')"
-  case "$_n" in
-    ''|0|-*) ok "the client is running at normal priority (nice ${_n:-0})" ;;
-    *) warn "the client is running at nice $_n, so it will be starved under load"
-       fix "quit it and start desk from the menu bar app or a terminal; root is needed to lower it" ;;
-  esac
-done
-
-# sdl-freerdp and not xfreerdp is deliberate: xfreerdp needs XQuartz.
-command -v xfreerdp >/dev/null 2>&1 && [ ! -x "$(command -v sdl-freerdp 2>/dev/null)" ] \
-  && warn "only xfreerdp is present, which needs XQuartz; sdl-freerdp does not"
-
-command -v python3 >/dev/null 2>&1 \
-  && ok "python3 present (the clipboard bridge needs it)" \
-  || bad "python3 missing, so the clipboard bridge cannot run"
+# Nothing on the Mac runs Python any more. It is the SERVER that needs it, for
+# remote/scroll-probe.py, and remote/check.sh asks about it there.
 
 case ":$PATH:" in
   *":$HOME/bin:"*) ok "~/bin is on PATH" ;;
@@ -160,7 +136,6 @@ for name in $DESK_COMMANDS; do
 done
 
 # The whole reason the symlink is resolved before dirname. A stale link that
-# resolves nowhere used to mean a session with no clipboard and no message.
 # The clipboard image shim lives on the server, not here, so what this can check
 # is that the repo still ships it. remote/check.sh asks the server whether it is
 # actually running.
@@ -168,27 +143,10 @@ done
   && ok "the clipboard image shim is in remote/" \
   || bad "remote/clip-png.sh is missing, so pasted images will not appear"
 
-if security find-generic-password -s "$DESK_KEYCHAIN_SERVICE" -a "$DESK_USER" -w >/dev/null 2>&1; then
-  ok "Keychain item '$DESK_KEYCHAIN_SERVICE' for '$DESK_USER'"
-else
-  bad "no Keychain item, so the RDP login will prompt every time"
-  fix "run desk-setup"
-fi
-
 [ -d "$DESK_SHARE" ] \
   && ok "shared folder $DESK_SHARE" \
   || warn "shared folder $DESK_SHARE does not exist yet (desk creates it)"
 
-# The client's own shortcuts default to Right Shift, so Right Shift plus Enter
-# toggled fullscreen and Right Shift plus M minimised, which read as the remote
-# desktop ignoring the key.
-if [ -f "$HOME/.config/freerdp/sdl-freerdp.json" ] \
-   && grep -q SDL_KeyModMask "$HOME/.config/freerdp/sdl-freerdp.json" 2>/dev/null; then
-  ok "FreeRDP shortcut override installed (Shift+Enter reaches the session)"
-else
-  warn "no FreeRDP shortcut override, so Shift+Enter toggles fullscreen instead"
-  fix "run $ROOT/mac/install.sh"
-fi
 
 if [ -d "$HOME/.config/karabiner" ]; then
   # WindowsApp, not sdl-freerdp. The rules reached FreeRDP through a file_paths
@@ -290,5 +248,5 @@ if [ "$FAIL" -gt 0 ]; then
   exit 1
 fi
 [ "$WARN" -gt 0 ] && echo "Warnings are things that work but are worse than they could be."
-echo "Ready. Run: desk"
+echo "Ready. Run: desk-tunnel, then connect with your RDP client."
 exit 0

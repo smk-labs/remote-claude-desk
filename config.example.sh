@@ -73,7 +73,6 @@ DESK_SHARE="${DESK_SHARE:-$HOME/RemoteShare}"
 # macOS Keychain item holding the Linux password for the RDP login. Created by
 # `desk setup`; read at connect time and fed to FreeRDP on stdin, so it never
 # appears in `ps` or in a file.
-DESK_KEYCHAIN_SERVICE="${DESK_KEYCHAIN_SERVICE:-remote-claude-desk}"
 
 # ─── bringing the SSH master up ──────────────────────────────────────────────
 # Optional. Leave it empty and `desk` runs a plain `ssh -fNM`, which is right

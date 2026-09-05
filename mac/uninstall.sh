@@ -21,7 +21,6 @@ fi
 BIN_DIR="$HOME/bin"
 # The list lives in lib/common.sh, sourced above, so this cannot drift from it.
 BIN_LINKS="$DESK_COMMANDS"
-FREERDP_FILE="$HOME/.config/freerdp/sdl-freerdp.json"
 KARABINER_FILE="$HOME/.config/karabiner/assets/complex_modifications/remote-claude-desk.json"
 
 usage() {
@@ -73,41 +72,6 @@ for name in $BIN_LINKS; do
     *) desk_warn "   KEPT    $link points at $dest, outside this repo. Left alone." ;;
   esac
 done
-desk_say ""
-
-# ---------------------------------------------------------------------------
-# 2. the FreeRDP shortcut override
-# ---------------------------------------------------------------------------
-
-desk_say "2. FreeRDP shortcuts"
-
-# Newest backup wins, and the names sort by time because the stamp is
-# year first. A glob avoids parsing ls output, which breaks on odd filenames.
-newest=""
-for candidate in "$FREERDP_FILE".bak-*; do
-  if [ -f "$candidate" ]; then
-    newest="$candidate"
-  fi
-done
-
-if [ -n "$newest" ]; then
-  cp -p "$newest" "$FREERDP_FILE"
-  rm -f "$newest"
-  desk_say "   restore $FREERDP_FILE from $newest"
-elif [ -f "$FREERDP_FILE" ]; then
-  # No backup means the file did not exist before install.sh wrote it. If it
-  # still matches what we wrote, it is ours to remove. If it does not, someone
-  # edited it since, and their edit outranks this script.
-  if cmp -s "$FREERDP_FILE" "$HERE/sdl-freerdp.json"; then
-    rm -f "$FREERDP_FILE"
-    desk_say "   removed $FREERDP_FILE (there was no file here before)"
-    desk_say "           Shift+Enter goes back to being eaten by the client."
-  else
-    desk_warn "   KEPT    $FREERDP_FILE has been edited since install. Left alone."
-  fi
-else
-  desk_say "   gone    nothing to remove"
-fi
 desk_say ""
 
 # ---------------------------------------------------------------------------

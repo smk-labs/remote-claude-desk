@@ -3,7 +3,6 @@
 #
 # Four small things, none of them clever:
 #   1. put the desk commands on your PATH
-#   2. stop FreeRDP eating Shift+Enter
 #   3. offer the Karabiner rules to Karabiner, without editing its config
 #   4. tell you what is missing
 #
@@ -38,8 +37,6 @@ fi
 BIN_DIR="$HOME/bin"
 # The list lives in lib/common.sh, sourced above, so this cannot drift from it.
 BIN_LINKS="$DESK_COMMANDS"
-FREERDP_DIR="$HOME/.config/freerdp"
-FREERDP_FILE="$FREERDP_DIR/sdl-freerdp.json"
 KARABINER_DIR="$HOME/.config/karabiner/assets/complex_modifications"
 KARABINER_FILE="$KARABINER_DIR/remote-claude-desk.json"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -55,7 +52,6 @@ install.sh - set up the macOS side of remote-claude-desk.
 
 What it does:
   * links desk, desk-doctor and desk-tunnel into ~/bin
-  * writes ~/.config/freerdp/sdl-freerdp.json (keeps Shift+Enter working)
   * copies the Karabiner rules into Karabiner's own import folder
   * reports missing dependencies, and installs nothing itself
 
@@ -79,25 +75,15 @@ desk_say ""
 
 desk_say "1. Dependencies"
 
-if command -v sdl-freerdp >/dev/null 2>&1; then
-  desk_say "   ok      sdl-freerdp ($(command -v sdl-freerdp))"
+# nc opens no connection here, it only proves the tunnel answers. It ships with
+# macOS, so a miss means something is wrong with the system, not with this
+# install.
+if command -v nc >/dev/null 2>&1; then
+  desk_say "   ok      nc"
 else
-  desk_say "   MISSING sdl-freerdp, the RDP client that draws the desktop"
-  desk_say "           brew install freerdp"
+  desk_say "   MISSING nc"
   MISSING=$((MISSING + 1))
 fi
-
-# nc opens no connection here, it only proves the tunnel answers, and security
-# reads the RDP password out of the Keychain. Both ship with macOS, so a miss
-# means something is wrong with the system, not with this install.
-for tool in nc security; do
-  if command -v "$tool" >/dev/null 2>&1; then
-    desk_say "   ok      $tool (part of macOS)"
-  else
-    desk_say "   MISSING $tool, which normally ships with macOS. Check your PATH."
-    MISSING=$((MISSING + 1))
-  fi
-done
 
 if command -v karabiner_cli >/dev/null 2>&1 || [ -d "/Applications/Karabiner-Elements.app" ]; then
   desk_say "   ok      Karabiner-Elements"
@@ -164,37 +150,10 @@ esac
 desk_say ""
 
 # ---------------------------------------------------------------------------
-# 3. the FreeRDP shortcut override
+# 3. the Karabiner rules
 # ---------------------------------------------------------------------------
 
-desk_say "4. FreeRDP shortcuts"
-
-# Why this file exists: FreeRDP's SDL client keeps its own shortcuts, and the
-# default modifier for them is Right Shift. So Right Shift plus Enter toggled
-# fullscreen and Right Shift plus M minimised the window, which meant Shift plus
-# Enter never reached the app you were typing in. SDL_KeyModMask moves those
-# shortcuts onto a combination nobody presses by accident.
-mkdir -p "$FREERDP_DIR"
-
-if [ -f "$FREERDP_FILE" ] && cmp -s "$FREERDP_FILE" "$HERE/sdl-freerdp.json"; then
-  desk_say "   ok      $FREERDP_FILE is already current"
-else
-  if [ -e "$FREERDP_FILE" ]; then
-    backup="$FREERDP_FILE.bak-$STAMP"
-    cp -p "$FREERDP_FILE" "$backup"
-    desk_say "   backup  $backup"
-  fi
-  cp "$HERE/sdl-freerdp.json" "$FREERDP_FILE"
-  desk_say "   wrote   $FREERDP_FILE"
-  desk_say "           Shift+Enter now reaches the remote app instead of the client."
-fi
-desk_say ""
-
-# ---------------------------------------------------------------------------
-# 4. the Karabiner rules
-# ---------------------------------------------------------------------------
-
-desk_say "5. Karabiner rules"
+desk_say "3. Karabiner rules"
 
 # The rules are copied into Karabiner's own import folder and never merged into
 # karabiner.json by hand. That file holds every device, profile and rule the
