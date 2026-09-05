@@ -207,10 +207,13 @@ else
 fi
 
 if [ -d "$HOME/.config/karabiner" ]; then
-  if grep -rqs 'sdl-freerdp' "$HOME/.config/karabiner/karabiner.json" 2>/dev/null; then
-    ok "Karabiner rules are enabled for sdl-freerdp"
+  # WindowsApp, not sdl-freerdp. The rules reached FreeRDP through a file_paths
+  # key that sat beside the bundle identifiers, so grepping for the old name
+  # would keep reporting green off a line that no longer decides anything.
+  if grep -rqs 'WindowsApp' "$HOME/.config/karabiner/karabiner.json" 2>/dev/null; then
+    ok "Karabiner rules are enabled for the RDP client"
   else
-    warn "Karabiner is installed but no rule targets sdl-freerdp"
+    warn "Karabiner is installed but no rule targets the RDP client"
     fix "run mac/install.sh, then enable the rules in Karabiner's UI"
   fi
 else
