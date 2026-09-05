@@ -289,3 +289,16 @@ lacks "$desk_src" 'pkill -f "[d]esk-clip" ' "--restart no longer kills every bri
 # than they drain. A click does it; a scroll does it every time.
 contains "$desk_src" 'export SDL_RENDER_VSYNC=' "desk decides whether the swap waits for the display"
 contains "$desk_src" '${DESK_VSYNC:-0}' "desk defaults that wait to off"
+
+# --- a native client still needs the keyboard pushed ------------------------
+#
+# xrdp sets the session keymap from what the client announces, after
+# xfce4-settings has had its say, so every session comes up as plain "us" no
+# matter what the server is configured with. `desk` pushes the real layout on
+# every connect. desk-tunnel used to say a native client was "on its own" and
+# leave it, and what that meant in practice was measured on a live session:
+# setxkbmap said layout: us, keycodes 191 to 202 were empty, Persian did not
+# exist and the Fn key did nothing.
+tunnel_src="$(cat "$ROOT/bin/desk-tunnel")"
+contains "$tunnel_src" 'desk_remote_run apply-layout.sh' "desk-tunnel pushes the keyboard layout too"
+contains "$tunnel_src" 'Keyboard: ${layout_note}' "desk-tunnel says whether the layout landed"

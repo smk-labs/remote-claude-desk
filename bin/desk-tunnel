@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
-# Forward the RDP port and stop there, for use with a native client such as
-# Microsoft's Windows App. Everything the `desk` client does for you (the Cmd
-# remap, the keyboard layout, the clipboard bridge) is NOT set up by this: a
-# native client is on its own.
+# Forward the RDP port for a native client such as Microsoft's Windows App, and
+# push the keyboard layout into the session, because nothing else will.
+#
+# The layout is not a nicety. xrdp sets the session keymap from what the client
+# announces, after xfce4-settings has had its say, so every session comes up as
+# plain "us" no matter what is configured on the server. `desk` pushes the real
+# layout on every connect; this used to say a native client was "on its own" and
+# leave it, which in practice meant the Persian keyboard did not exist and the
+# Fn key did nothing. Measured on a live session reached this way:
+# `setxkbmap -query` said layout: us, and keycodes 191 to 202 were all empty.
+#
+# Still NOT set up by this, because both are FreeRDP-specific: the Cmd remap
+# (`desk` passes it as a client argument) and the clipboard bridge (the RDP
+# clipboard channel carries no Persian, which is why `desk` runs its own; a
+# native client uses its own clipboard, which handles Unicode).
 set -uo pipefail
 
 ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -13,8 +24,28 @@ desk_load_config "$ROOT"
 desk_ensure_master
 desk_forward
 
+# The layout needs a session to push into, and with a native client the session
+# may not exist until after it connects. So this is a report, never a failure:
+# no session yet is the normal state on a first run, and running desk-tunnel
+# again once connected is what fixes it. Saying which of the two happened is the
+# whole point, because a silent no-op here looks exactly like a working setup
+# until the moment you type Persian.
+layout_note="run desk-tunnel again once connected, to load '$DESK_LAYOUTS'"
+if display="$(desk_remote_display 2>/dev/null)" && [ -n "$display" ]; then
+  # Same ceiling as desk: 12 tries, 2 seconds apart, three passes in a row
+  # before it is believed, because xrdp can overwrite the keymap after the first
+  # one lands.
+  if desk_retry 12 2 3 -- desk_remote_run apply-layout.sh \
+       "DISP=$display" "LAYOUTS=$DESK_LAYOUTS" "TOGGLE=$DESK_LAYOUT_TOGGLE"; then
+    layout_note="keyboard '$DESK_LAYOUTS' loaded on $display (Option+Shift switches)"
+  else
+    layout_note="could not confirm '$DESK_LAYOUTS' on $display after 12 tries"
+  fi
+fi
+
 cat <<INFO
 Tunnel up on 127.0.0.1:${DESK_LOCAL_PORT}
+Keyboard: ${layout_note}
 
 In your RDP client, add a PC:
   PC name    localhost:${DESK_LOCAL_PORT}
