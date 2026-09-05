@@ -118,7 +118,7 @@ if [ "$orphans" -gt 0 ]; then
 elif [ "$live" -gt 0 ]; then
   p ok "$live live session(s), all tracked by the current sesman"
 else
-  p ok "no session running yet (desk will start one)"
+  p ok "no session running yet (your RDP client will start one)"
 fi
 
 # Which display, and is it ours. Other tenants running Xvfb with -ac have
