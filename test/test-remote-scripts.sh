@@ -96,3 +96,13 @@ contains "$(cat "$ROOT/bin/desk-tunnel")" 'desk_remote_run heal-orphans.sh' \
 # where no amount of Mac-side care can reach it.
 contains "$(cat "$ROOT/remote/check.sh")" 'cliprdr=false' "check.sh verifies the RDP clipboard channel is off"
 contains "$(cat "$ROOT/server/install.sh")" 'Channels cliprdr false' "server/install.sh turns the channel off"
+
+# The image shim's check must follow the channel it serves.
+#
+# With the RDP clipboard off, clip-png has nothing to convert and its absence is
+# correct, not a fault. Warning about a helper we deliberately retired is how a
+# check earns being ignored, and an ignored check is worth less than none.
+check_src="$(cat "$ROOT/remote/check.sh")"
+contains "$check_src" 'cliprdr_on=0' "check.sh records whether the RDP clipboard channel is on"
+contains "$check_src" 'clip-png is retired, which is right while the RDP channel is off' \
+         "check.sh calls a retired shim correct rather than missing"

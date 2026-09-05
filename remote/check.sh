@@ -147,27 +147,45 @@ fi
 # quitting the app clears it. The bridge carries the clipboard instead, and two
 # owners of the X CLIPBOARD selection race each other anyway.
 if grep -qE "^cliprdr=false" /etc/xrdp/xrdp.ini 2>/dev/null; then
+  cliprdr_on=0
   p ok "the RDP clipboard channel is off, so the client cannot deadlock on an image"
 else
+  cliprdr_on=1
   p bad "the RDP clipboard channel is ON, so a screenshot will deadlock the client"
   f "set cliprdr=false in the [Channels] section of /etc/xrdp/xrdp.ini"
 fi
 
-# The two session helpers. Both are silent when absent, which is the whole
-# problem: the clipboard simply stops carrying images and the keyboard simply
-# comes up as plain "us", and neither says a word about why.
-for h in clip-png xrdp-layout; do
-  case "$h" in
-    clip-png)    what="pasted images will not appear" ;;
-    xrdp-layout) what="the session keyboard will stay plain us" ;;
-  esac
-  if [ -f "$HOME/.config/autostart/$h.desktop" ]; then
-    p ok "$h has an autostart entry"
+# The keyboard helper is unconditional: nothing else puts the layout back, and
+# when it is missing the session just comes up as plain "us" and says nothing.
+if [ -f "$HOME/.config/autostart/xrdp-layout.desktop" ]; then
+  p ok "xrdp-layout has an autostart entry"
+else
+  p warn "xrdp-layout has no autostart entry, so the session keyboard will stay plain us"
+  f "see server/README.md, section 'The two session helpers'"
+fi
+
+# The image shim is NOT unconditional, and saying so is the point. It converts
+# what the RDP clipboard channel delivers, so with that channel off it has
+# nothing to convert and its absence is correct rather than a fault. Worse than
+# useless, in fact: the SSH bridge owns the X CLIPBOARD selection now, and a
+# second owner is the race this repo has a paragraph about.
+#
+# So the check follows the channel. Warning about a helper we deliberately
+# retired is how a check earns being ignored, and a check that is ignored is
+# worth less than no check at all.
+if [ "${cliprdr_on:-0}" = "1" ]; then
+  if [ -f "$HOME/.config/autostart/clip-png.desktop" ]; then
+    p ok "clip-png has an autostart entry"
   else
-    p warn "$h has no autostart entry, so $what"
+    p warn "the RDP clipboard channel is on but clip-png is not, so pasted images will not appear"
     f "see server/README.md, section 'The two session helpers'"
   fi
-done
+elif [ -f "$HOME/.config/autostart/clip-png.desktop" ]; then
+  p warn "clip-png autostarts but the RDP channel is off, so it can only fight the SSH bridge for the clipboard"
+  f "rm ~/.config/autostart/clip-png.desktop"
+else
+  p ok "clip-png is retired, which is right while the RDP channel is off"
+fi
 
 # Foreign displays, for context only.
 foreign=0
