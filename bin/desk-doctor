@@ -112,6 +112,42 @@ for name in $DESK_COMMANDS; do
 done
 
 # The whole reason the symlink is resolved before dirname. A stale link that
+# ─── the three things the clipboard fix depends on ───────────────────────────
+#
+# Windows App deadlocks when an image reaches the Mac pasteboard while it is
+# redirecting the clipboard. A screenshot taken over a full-screen session hits
+# it every time: the clipboard stops, the window will not reconnect, and only
+# quitting the whole app clears it. The bug is inside a closed client, so the
+# fix is to take that path out of use entirely and carry the clipboard over SSH
+# instead, which loses nothing: text and images still cross both ways.
+#
+# That leaves three conditions, and every one of them fails silently. This is
+# the check that turns "it works today" into something that stays true, because
+# on 2026-09-05 the bridge died during an unrelated outage and the only symptom
+# was copy and paste quietly not working.
+head_ "Clipboard"
+
+# 1. The Mac must not redirect the clipboard.
+redir="$(defaults read com.microsoft.rdc.macos ClientSettings.DisableClipboardRedirection 2>/dev/null)"
+if [ "$redir" = "1" ]; then
+  ok "Windows App is not redirecting the clipboard, so the deadlock cannot happen"
+else
+  bad "Windows App IS redirecting the clipboard, so a screenshot will wedge the session"
+  fix "defaults write com.microsoft.rdc.macos ClientSettings.DisableClipboardRedirection -bool true"
+  fix "then quit Windows App completely and reopen it"
+fi
+
+# 2. The bridge must be running, or nothing carries the clipboard at all.
+if pgrep -f "[d]esk-clip --for .*:${DESK_LOCAL_PORT}\$" >/dev/null 2>&1; then
+  ok "the SSH clipboard bridge is running for this machine"
+else
+  bad "no clipboard bridge for this machine, so nothing carries copy and paste"
+  fix "desk-tunnel starts it; the LaunchAgent re-runs that every 5 minutes"
+fi
+
+# 3. Both owners of the X CLIPBOARD selection cannot coexist. The server half of
+# this is asked in remote/check.sh, which can see xrdp.ini.
+
 # The clipboard image shim lives on the server, not here, so what this can check
 # is that the repo still ships it. remote/check.sh asks the server whether it is
 # actually running.

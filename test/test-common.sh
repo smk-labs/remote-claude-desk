@@ -222,3 +222,21 @@ lacks "$tunnel_src" 'DESK_CLIP' "the bridge is not optional any more, so no knob
 [ -f "$ROOT/mac/pbio.swift" ] \
   && ok "the pasteboard reader source is present" \
   || bad "mac/pbio.swift is missing, so images cannot cross"
+
+# --- the clipboard fix must not be able to regress quietly ------------------
+#
+# Windows App deadlocks when an image reaches the Mac pasteboard while it is
+# redirecting the clipboard, so a screenshot over a full-screen session wedges
+# everything until the app is quit entirely. The bug is in a closed client. The
+# fix is to stop using that path and carry the clipboard over SSH, which costs
+# nothing: text and images both cross both ways, verified byte for byte.
+#
+# It leaves three conditions, all of which fail silently, and one of them did:
+# on 2026-09-05 the bridge died during an unrelated outage and the only symptom
+# was copy and paste not working. So the doctor asserts all three.
+contains "$doctor_src" 'DisableClipboardRedirection' \
+         "desk-doctor checks the Mac is not redirecting the clipboard"
+contains "$doctor_src" '[d]esk-clip --for' \
+         "desk-doctor checks the clipboard bridge is running"
+contains "$(cat "$ROOT/remote/check.sh")" 'cliprdr=false' \
+         "check.sh checks the RDP clipboard channel is off on the server"

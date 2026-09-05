@@ -535,6 +535,41 @@ repair paths in this order: the launcher, the units, the path-named directories,
 and last the cosmetic ones. Back up before the first sed. Verify by RUNNING the
 launcher, not by grepping it, which is how the owner check was found at all.
 
+## Trap 19: the screenshot freeze is in a closed client, so the fix is to stop using the path
+
+Take a screenshot on the Mac while a full-screen Windows App session is up and
+everything stops: the image will not paste, the clipboard dies, the window will
+not reconnect to the session it just had, and only quitting the whole app clears
+it. It happens against a real Windows host too, so it is not xrdp and not XFCE.
+
+**What it is.** Windows App deadlocks when an image lands on the Mac pasteboard
+while it is redirecting the clipboard, and a large image makes it certain. The
+bug is inside a closed binary. There is no patch to write.
+
+**What can be done about it, which is more than it sounds.** The failing path is
+the RDP clipboard channel, and that channel is not the only way a clipboard can
+cross. Turn it off at both ends and carry the clipboard over the SSH master
+instead: `DisableClipboardRedirection` on the Mac, `cliprdr=false` on the
+server, and `desk-clip` in between. Nothing is given up. Measured after the
+change, byte for byte in both directions:
+
+    server -> Mac   3859 bytes, PNG 200x120   ->  3859 bytes, PNG 200x120
+    Mac -> server   5056 bytes, PNG 900x900   ->  5056 bytes, PNG 900x900
+
+and the second of those is the exact action that used to wedge the session.
+
+**Why this is worth calling a fix rather than a workaround.** The capability is
+intact and the failure mode is gone, not avoided. Re-enabling the channel would
+not restore anything, it would only put the deadlock back and add a second owner
+of the X CLIPBOARD selection racing the bridge.
+
+**The part that nearly undid it.** The arrangement rests on three conditions,
+and every one fails silently: the Mac setting, the server setting, and a bridge
+process. The bridge died during an unrelated outage the same day and the only
+symptom was copy and paste quietly not working. So all three are checks now,
+proved by flipping the Mac setting and watching the doctor go red. A fix that
+depends on invisible state is not finished until something asserts that state.
+
 ## What is not verified
 
 - **The scroll fix was confirmed by feel, not by a second measurement.** The
