@@ -390,6 +390,38 @@ remembered.
   The file is sourced, so everything in it runs, which on a shared box makes a
   writable config someone else's shell
 
+## Trap 16: the clipboard path that hangs is the client's, not the protocol's
+
+Take a macOS screenshot while the RDP window is up and Windows App deadlocks:
+the clipboard stops carrying anything, the session refuses to reopen, and only
+quitting the whole app clears it. It is not xrdp, not XFCE and not the tunnel.
+The same people reproduce it against real Windows hosts, and Jump Desktop and
+Royal TSX do not do it. Reported to Microsoft repeatedly since early 2026, never
+acknowledged, still present in 11.4.0.
+
+What makes it worth writing down is the shape of the fix. There was already a
+component that carries the clipboard without touching RDP at all, `desk-clip`,
+written for an unrelated reason: the RDP channel dropped every non-ASCII byte,
+so Persian arrived empty. It had just been deleted as a FreeRDP leftover. It was
+not one. A component that avoids a protocol is worth keeping precisely because
+the protocol's bugs cannot reach it.
+
+Measured end to end before believing it: Persian text both ways and a PNG one
+way, byte-identical md5 at both ends each time.
+
+## Trap 17: the trap in trap 2 caught the person who wrote trap 2
+
+Verifying the above, Persian went onto the pasteboard with `pbcopy` under an
+unset locale, came back 35 bytes instead of 17, and the bridge looked guilty.
+The bridge was fine. `pbcopy` and `pbpaste` both take their encoding from the
+caller, so a round trip through the pair matches while the pasteboard itself
+holds mojibake, and any third reader sees the damage. That is exactly trap 2,
+one screen up this file, written after it cost hours the first time.
+
+Reading a trap is not the same as remembering it at the moment it applies. The
+tell was that `desk-pbio` and `pbpaste` disagreed: when two readers of the same
+bytes disagree, suspect the writer.
+
 ## What is not verified
 
 - **The scroll fix was confirmed by feel, not by a second measurement.** The

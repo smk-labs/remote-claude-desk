@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Text clipboard bridge between this Mac and the remote Linux desktop.
+"""Clipboard bridge between this Mac and the remote Linux desktop.
 
 Started and stopped by `desk-tunnel`. It reads its settings from the environment,
 which `desk-tunnel` exports: DESK_HOST, DESK_SSH_SOCKET, DESK_DISPLAY.
@@ -25,10 +25,14 @@ FreeRDP says so itself in the log, at exactly those moments:
 encoding or format option to fix it with. Text therefore rides the SSH master
 that is already up for the tunnel: base64 in, base64 out, no codepage anywhere.
 
-Cost, stated plainly: this carries TEXT only. Images and files still go through
-the shared drive. And `desk` has to run the RDP channel OFF, because two owners
-of the X CLIPBOARD selection race, and xrdp-chansrv wins often enough to hand
-back the broken copy.
+It carries text both ways and pictures both ways, as png. Files still go through
+the shared drive.
+
+The RDP clipboard channel has to be OFF while this runs, for two reasons. Two
+owners of the X CLIPBOARD selection race, and xrdp-chansrv wins often enough to
+hand back the broken copy. And Windows App deadlocks outright when an image
+reaches the Mac pasteboard while it is redirecting the clipboard, which is the
+bug that brought this file back after it had been deleted.
 
 A trap worth naming, because it cost hours
 ------------------------------------------
@@ -164,10 +168,14 @@ def pump(ag):
 
     def from_remote():
         for line in ag.stdout:
-            if not line.startswith(b"CLIP "):
+            if line.startswith(b"CLIPIMG "):
+                kind, payload = "image", line[8:]
+            elif line.startswith(b"CLIP "):
+                kind, payload = "text", line[5:]
+            else:
                 continue
             try:
-                data = base64.b64decode(line[5:].strip())
+                data = base64.b64decode(payload.strip())
             except Exception:
                 continue
             if len(data) > MAX_BYTES:
@@ -180,7 +188,16 @@ def pump(ag):
                 last["remote"] = data
                 last["mac"] = data     # BEFORE the write, so the Mac poll
                                        # cannot race in and bounce it back
-            subprocess.run(["pbcopy"], input=data, env=PB_ENV)
+            # Through pbio when it is there, because pbcopy speaks text only
+            # and takes its encoding from the environment. pbcopy is the
+            # fallback and can only carry text, so an image without pbio is
+            # dropped rather than written as garbage.
+            if os.path.exists(PBIO):
+                subprocess.run([PBIO, "write", kind], input=data)
+            elif kind == "text":
+                subprocess.run(["pbcopy"], input=data, env=PB_ENV)
+            else:
+                log("an image came back but desk-pbio is not built, so it was dropped")
 
     threading.Thread(target=from_remote, daemon=True).start()
 
@@ -303,7 +320,7 @@ def main():
             continue
         current["agent"] = ag
         if first:
-            log("bridge up on %s (text only)" % DISPLAY)
+            log("bridge up on %s (text and images, both ways)" % DISPLAY)
             first = False
         else:
             log("bridge back up on %s" % DISPLAY)

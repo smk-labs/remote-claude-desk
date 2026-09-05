@@ -5,8 +5,8 @@ Mac text navigation works, a second keyboard layout works, one key switches
 language, and a copied image pastes. Outside that one window the Mac is
 unchanged.
 
-Run `desk-tunnel` and the keyboard half is applied for you. The clipboard half
-now lives entirely on the server.
+Run `desk-tunnel` and both halves are applied for you. It pushes the keyboard
+layout into the session and starts the clipboard bridge.
 
 ## Three problems, three homes
 
@@ -17,7 +17,7 @@ fix lives where is the point of this page.
 | --- | --- |
 | Text keys (Home, End, word jump), Cmd+Q, Cmd+W, Fn | `mac/karabiner-rules.json` |
 | No second layout, no language key | `remote/apply-layout.sh`, pushed per connection by `desk-tunnel` |
-| Text pastes, an image never does | `remote/clip-png.sh`, running inside the session |
+| The clipboard carries nothing, and the client hangs after a screenshot | `bin/desk-clip`, started by `desk-tunnel`, with RDP's own clipboard turned off |
 
 Symptom first? Start at [troubleshooting.md](troubleshooting.md).
 
@@ -109,37 +109,91 @@ modifiers, which leaves the lock half-applied in the session.
 
 ## The clipboard
 
-Text crosses on xrdp's own clipboard channel, which is Windows App's clipboard
-talking to `xrdp-chansrv`. Nothing on the Mac is involved.
+RDP carries no clipboard at all here. Both directions ride the SSH master
+instead, through `bin/desk-clip`, which `desk-tunnel` starts for you.
 
-This used to be a pair of processes over the SSH master, because the channel as
-FreeRDP drove it dropped every non-ASCII item silently. That bridge was deleted
-on 2026-09-05 with the rest of the client layer. The measurements that justified
-it are kept in [lessons.md](lessons.md).
+### Why RDP's own clipboard is off
 
-### Images need one shim on the server
+Windows App deadlocks when an image lands on the Mac pasteboard while the client
+is redirecting the clipboard towards the remote side. Taking a macOS screenshot
+over the session is enough to trigger it. After that the clipboard carries
+nothing, the session refuses to reopen, and only quitting the whole app clears
+it.
 
-The channel hands an image to X as `image/bmp` and nothing else. Chromium,
-Electron and GTK ask for `image/png` and ignore BMP, so a paste looks like
-nothing happening at all: the cursor blinks and the app moves on, because the
-format it wanted was never offered.
+It is the client's bug, not xrdp's and not this repo's. It has been reported to
+Microsoft repeatedly since early 2026, never acknowledged, and is still present
+in version 11.4.0. The same people reproduce it against real Windows hosts, and
+other RDP clients such as Jump Desktop and Royal TSX do not do it. The published
+workaround is to stop using the direction that hangs.
 
-Measured on a live session, xrdp 0.10.1:
+### Turning it off
 
+Two routes, and either one is enough.
+
+- **Per connection.** In Windows App, edit the PC and set the clipboard
+  redirection dropdown to off.
+- **For every connection.** One line, then quit and reopen the app, because it
+  reads the setting at launch:
+
+```sh
+defaults write com.microsoft.rdc.macos "ClientSettings.DisableClipboardRedirection" -bool true
 ```
-TARGETS        -> TARGETS TIMESTAMP MULTIPLE image/bmp
-image/png      -> 0 bytes
-image/bmp      -> 15286 bytes, "PC bitmap, Windows 3.x, 68 x 56 x 32"
-```
 
-- `remote/clip-png.sh` watches the clipboard, converts a BMP-only offer with
-  ImageMagick, and re-offers it as PNG
-- it runs inside the session from an autostart entry. `server/install.sh` does
-  not write that entry, so it is set up on the box by hand
-- it cannot feed itself: once PNG is on the clipboard the BMP is gone with it,
-  so the condition is false and nothing is converted twice
-- it needs `xclip` and ImageMagick on the server. `desk-doctor` checks both
-- on xrdp 0.9.24 the same read produced a **truncated** BMP that ImageMagick
-  refused with "length and filesize do not match", so this shim could not have
-  worked then. It works because the bytes finally arrive whole on 0.10, which is
-  one of the two reasons that version floor is not negotiable
+The app's documented modes are `0` do not redirect, `1` full redirection, `2`
+local to remote only, and `3` remote to local only. Mode `3` also avoids the
+deadlock, and it is what the public reports recommend, because only the local to
+remote direction hangs. With the bridge carrying both directions, `0` loses
+nothing.
+
+### What the bridge is
+
+Two processes and one SSH connection. No part of it speaks RDP, which is exactly
+why the client cannot deadlock it: the client is not in the path.
+
+- `bin/desk-clip` runs on the Mac. It reads the pasteboard through
+  `bin/desk-pbio`, a small Swift binary that `mac/install.sh` builds from
+  `mac/pbio.swift`, and sends what it finds down the SSH master as base64. With
+  no `desk-pbio` it falls back to `pbpaste`, which speaks text only, so an image
+  is invisible to it and cannot cross.
+- `remote/clip-agent.py` runs in the session. It owns the X CLIPBOARD selection
+  through `xclip`, offering `UTF8_STRING` for text and `image/png` for a
+  picture, and it reports back when something else in the session copies.
+- `desk-tunnel` starts one bridge per machine, in the background, and says what
+  it did on its `Clipboard:` line. With no session there is nothing to attach
+  to, exactly as with the keyboard: connect, then run `desk-tunnel` again. The
+  five-minute re-run replaces a bridge that died and leaves a live one alone.
+- Neither helper is on your PATH. Both are found next to `desk-tunnel` rather
+  than typed, so `DESK_COMMANDS` in `lib/common.sh` still lists only
+  `desk-doctor` and `desk-tunnel`. `desk-pbio` is built rather than committed,
+  so a fresh clone does not have it until you run the installer.
+- Anything over 2 MB is skipped and logged rather than sent. The log is
+  `~/.cache/remote-claude-desk/clip.log`.
+
+### What crosses, measured
+
+Text goes both ways. An image goes from the Mac into the session. An image does
+not come back: the remote agent watches the X selection for text only, so a
+picture copied inside the session stays there.
+
+Measured end to end against a live session, md5 taken at both ends:
+
+| What | Direction | Size | md5 |
+| --- | --- | --- | --- |
+| Persian text | Mac to remote | 17 bytes | `a6cb75cf5976d4ff5ea11482de732745` |
+| A 64x64 PNG | Mac to remote | 7858 bytes | `3486e6569259b2271b08348a1f31074e` |
+| Persian text | remote to Mac | 31 bytes | `0e3e50efb88eb5ec6d95e92bdae9c55b` |
+
+Every one was byte-identical at both ends. Trap 17 in [lessons.md](lessons.md)
+is about the measurement itself, which was wrong before it was right.
+
+### The BMP shim is dormant, not gone
+
+`remote/clip-png.sh` watches the clipboard, converts a BMP-only offer with
+ImageMagick, and re-offers it as PNG. It was written for the RDP channel, which
+hands X an image as `image/bmp` and nothing else, while Chromium, Electron and
+GTK ask for `image/png` and ignore BMP.
+
+The bridge does not need it. An image sent over SSH is offered as `image/png`
+already, which is the format those apps request, so on this path there is
+nothing to convert. The script stays, unused, for anyone who turns the RDP
+channel back on. `desk-doctor` still checks that it and ImageMagick are present.

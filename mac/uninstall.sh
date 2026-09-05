@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Undo mac/install.sh, and nothing else.
 #
-# It removes only what install.sh created: three symlinks, one FreeRDP config,
 # one Karabiner asset file. It never touches your karabiner.json, your Keychain,
 # your config.sh, or anything else in your home directory.
 set -euo pipefail
@@ -30,7 +29,6 @@ uninstall.sh - undo mac/install.sh.
     ./mac/uninstall.sh          remove what install.sh added
     ./mac/uninstall.sh --help   this text
 
-It removes the ~/bin symlinks, restores or removes the FreeRDP config, and
 removes the Karabiner asset file. It leaves your Keychain item and any rules
 you enabled in Karabiner's window alone, and tells you how to clear those.
 USAGE

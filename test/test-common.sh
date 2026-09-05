@@ -186,8 +186,11 @@ done
 # Found by running `desk-tunnel --help`, not by reading it: the last line still
 # said "exactly as it is for desk". Every grep in this suite had passed, because
 # they all look for what should be present and none looked for what should not.
-for name in $DESK_COMMANDS; do
-  cmd="$ROOT/bin/$name"
+# bin/ AND mac/, because the guard missed the installers the first time and the
+# installers were exactly where the next two lies were: usage() offering to link
+# a command that does not exist, and a closing hint telling you to run it.
+for cmd in $(for n in $DESK_COMMANDS; do echo "$ROOT/bin/$n"; done; ls "$ROOT"/mac/*.sh); do
+  name="$(basename "$cmd")"
   # Comments are stripped first. A comment saying what `desk` used to do is the
   # house style and the reason half this repo is readable; a STRING that tells
   # someone to run it is a lie. Only the second kind is a bug.
@@ -207,8 +210,8 @@ done
 # Windows App deadlocks when an image reaches the Mac pasteboard while it is
 # redirecting the clipboard towards the remote side: a screenshot is enough, and
 # it then refuses to reopen the session until the whole app is quit. Known bug,
-# unfixed as of 11.4.0. The client is set to "Remote to Local" only, so the Mac
-# to remote direction has no carrier over RDP at all, and desk-clip is it.
+# unfixed as of 11.4.0. The client redirects no clipboard at all now, so RDP
+# carries neither direction and desk-clip carries both.
 tunnel_src="$(cat "$ROOT/bin/desk-tunnel")"
 contains "$tunnel_src" '"$ROOT/bin/desk-clip"' "desk-tunnel starts the clipboard bridge"
 contains "$tunnel_src" 'Clipboard: ${bridge_note}' "desk-tunnel says what the bridge did"

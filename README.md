@@ -31,10 +31,11 @@ with no Claude anywhere: what it really ships is a Linux desktop from a Mac that
 behaves the way a Mac user expects.
 
 It is not an RDP client either, and no longer tries to be. You connect with
-Microsoft's Windows App, which keeps its own saved credentials, its own keyboard
-handling and its own clipboard. This repo used to drive FreeRDP's SDL client
-instead; that client froze, macOS recorded where, and the whole client layer was
-deleted on 2026-09-05. The measurements are in
+Microsoft's Windows App, which keeps its own saved credentials and its own
+keyboard handling. Its clipboard is the one part you switch off: it deadlocks
+the app, so the clipboard travels over SSH instead. This repo used to drive
+FreeRDP's SDL client; that client froze, macOS recorded where, and the whole
+client layer was deleted on 2026-09-05. The measurements are in
 [docs/lessons.md](docs/lessons.md), trap 11.
 
 ## Why the Mac still has a job
@@ -47,10 +48,15 @@ in, and a tunnel has to be built from the machine you are sitting at. That is
 what `desk-tunnel` does.
 
 While it is there, it does three more things that also have to happen from this
-side: it brings the SSH master up, clears an orphaned session before that
-session kills your next connect, and pushes your keyboard layout into the live
-X session, because xrdp sets the keymap from what the client announces and every
+side. It brings the SSH master up. It clears an orphaned session before that
+session kills your next connect. It pushes your keyboard layout into the live X
+session, because xrdp sets the keymap from what the client announces and every
 session otherwise comes up as plain `us`.
+
+Then a fourth: it starts the clipboard bridge. Windows App's own clipboard has
+to stay off, because it deadlocks the app, so `desk-clip` carries both
+directions over the SSH master instead. Why, and how to turn the client's off,
+is in [docs/keyboard-and-clipboard.md](docs/keyboard-and-clipboard.md).
 
 ## The problem it actually solves
 
@@ -63,7 +69,7 @@ announces itself, which is what makes it expensive.
 | Persian, or any second layout, does not exist in the session, and the Fn key does nothing | xrdp sets the session keymap from what the client announces, after `xfce4-settings` has had its say |
 | A trackpad flick scrolls a whole page | xorgxrdp before 0.10 made a full wheel click out of every RDP packet instead of accumulating the delta |
 | Every login fails with "No X displays are available" after an xrdp upgrade | xrdp 0.10 caps display numbers at 63 by default, and this setup puts them at 150 |
-| Text pastes but an image never does | xrdp offers a clipboard image as BMP and nothing else, while Chromium, Electron and GTK ask for PNG |
+| You take a screenshot, and afterwards the clipboard carries nothing and the session will not reopen | Windows App deadlocks when an image reaches the Mac pasteboard while it is redirecting the clipboard towards the remote side. A Microsoft bug, unfixed as of 11.4.0 |
 | Home, End, word jump, Cmd+Q, Cmd+W all wrong | Mac text navigation has no equivalent on Linux |
 | Every TLS connection fails | Ubuntu ships the `xrdp` user outside the `ssl-cert` group, so it cannot read its own key |
 | Anyone else on the box can reach your login prompt | xrdp's default listener is `0.0.0.0:3389`, open to the machine and to the internet |
@@ -105,8 +111,16 @@ Windows App, add a PC with:
 | PC name | `localhost:33890`, or whatever `DESK_LOCAL_PORT` says |
 | User account | your `DESK_USER` and its Linux password |
 | Folders | add `~/RemoteShare` to get the shared drive |
+| Clipboard | set redirection to off. It deadlocks the app, and `desk-clip` carries the clipboard over SSH instead |
 
 Windows App saves the password itself, so nothing here stores one.
+
+One line turns it off for every connection at once instead. Quit and reopen the
+app afterwards, because it reads the setting at launch.
+
+```bash
+defaults write com.microsoft.rdc.macos "ClientSettings.DisableClipboardRedirection" -bool true
+```
 
 ## The daily command
 
@@ -116,13 +130,14 @@ desk-tunnel --install
 
 Run that once per Mac and you never type anything again. It writes a LaunchAgent
 named after this machine that runs `desk-tunnel` at login and every five
-minutes: that is what rebuilds a master dropped by a wifi handoff, and what
-pushes the layout into a session that did not exist when you logged in. Every
-step inside is idempotent, so a re-run on a healthy setup is three cheap checks.
+minutes: that is what rebuilds a master dropped by a wifi handoff, what pushes
+the layout into a session that did not exist when you logged in, and what
+replaces a clipboard bridge that died. Every step inside is idempotent, so a
+re-run on a healthy setup is a few cheap checks.
 
 | Command | What it does |
 |---|---|
-| `desk-tunnel` | open the tunnel, heal an orphan, push the layout, once |
+| `desk-tunnel` | open the tunnel, heal an orphan, push the layout, start the clipboard bridge, once |
 | `desk-tunnel --install` | do that at login and every 5 minutes, for this machine |
 | `desk-tunnel --uninstall` | stop doing that |
 | `desk-doctor` | check every precondition on both machines |
@@ -152,15 +167,21 @@ One config file, two commands, and code split by which machine runs it.
 ```
 config.example.sh     the only file you edit
 lib/common.sh         config, SSH, display discovery, safe remote kill, retry
-bin/                  desk-tunnel, desk-doctor
-remote/               the six scripts that run on the server
+bin/                  desk-tunnel, desk-doctor, and the two clipboard helpers
+                      that sit beside them
+remote/               the seven scripts that run on the server
 test/                 run, plus the checks it runs
-mac/                  install.sh, uninstall.sh, the Karabiner rules
+mac/                  install.sh, uninstall.sh, the Karabiner rules, the
+                      pasteboard reader
 server/               install.sh, the orphan reaper, the listener lock, the
                       isolated Claude Desktop launcher
 docs/                 how each fix was measured, and which diagnoses were wrong
 ```
 
+- `bin/` holds four files but only two commands. `desk-clip` and `desk-pbio` are
+  started by `desk-tunnel` and found next to it, never typed, so `DESK_COMMANDS`
+  in `lib/common.sh` keeps them off your PATH. `desk-pbio` is built by
+  `mac/install.sh` from `mac/pbio.swift` rather than committed
 - `remote/` holds every line that executes on the server. One function,
   `desk_remote_run` in `lib/common.sh`, sends a script over the SSH master and
   runs it there. Those scripts used to be text inside the commands, where no
@@ -177,7 +198,7 @@ Run the tests first. They need a Mac and nothing else.
 test/run
 ```
 
-- 51 checks in about a second. No server, no SSH, no window
+- 59 checks in about a second. No server, no SSH, no window
 - they cover the shared library, the config guard, and that every script in
   `remote/` still parses and is shellcheck clean
 
@@ -187,12 +208,17 @@ Nothing exotic on either end, and no daemon is added to your Mac beyond the
 optional LaunchAgent.
 
 - **Mac:** macOS 13 or later, Microsoft's Windows App, and optionally
-  Karabiner-Elements for the Mac keys. `nc` and `ssh` ship with macOS
+  Karabiner-Elements for the Mac keys. `nc` and `ssh` ship with macOS. The Xcode
+  command line tools (`xcode-select --install`) supply the `python3` that runs
+  `desk-clip` and the `swiftc` that builds `bin/desk-pbio`. Without `desk-pbio`
+  the clipboard still carries text, but not images
 - **Server:** Ubuntu 22.04 or 24.04, XFCE, `xclip`, ImageMagick, `setxkbmap`,
-  `xmodmap`, `python3`
+  `xmodmap`, `python3`. `xclip` is what the clipboard agent owns the X selection
+  with. ImageMagick is only for `remote/clip-png.sh`, which is dormant while the
+  RDP clipboard is off
 - **xrdp 0.10 or later, with xorgxrdp 0.10 or later.** Not optional. On 0.9.x a
-  trackpad flick scrolls about ten times too far, and a clipboard image arrives
-  truncated, so it cannot be converted at all
+  trackpad flick scrolls about ten times too far, and no Mac-side setting can
+  change it
 - **Between them:** SSH key access, and a `~/.ssh/config` entry with
   `ControlMaster auto` so one connection is reused
 

@@ -146,9 +146,11 @@ fi
 # of 11.4.0, and absent from other RDP clients. The reporter's reading is a race
 # that leaves a mutex around the system pasteboard held.
 #
-# So the client is set to "Remote to Local" only, mode 3, which the same reports
-# confirm never deadlocks: the direction that hangs is simply not used. That
-# leaves Mac to remote with no carrier, and this is it.
+# So the client redirects no clipboard at all, mode 0. Mode 3, remote to local
+# only, is the workaround the public reports settle on, and it does avoid the
+# deadlock. Mode 0 is better here for a reason those reports do not have: this
+# bridge carries both directions, so turning the channel off entirely costs
+# nothing and leaves no second owner of the X CLIPBOARD selection to race with.
 #
 # desk-clip cannot deadlock the client because it never speaks to it. It reads
 # the Mac pasteboard directly and writes the X selection over the SSH master
@@ -170,7 +172,7 @@ if [ -n "${display:-}" ]; then
       --for "$DESK_HOST:$DESK_LOCAL_PORT" </dev/null \
       >>"$HOME/.cache/remote-claude-desk/clip.log" 2>&1 &
     disown 2>/dev/null || true
-    bridge_note="started on $display (Mac to remote, over SSH)"
+    bridge_note="started on $display (text and images, both ways, over SSH)"
   else
     bridge_note="desk-clip is not at $ROOT/bin/desk-clip"
   fi

@@ -18,17 +18,28 @@ having similar names and completely different lifetimes.
   ends it.
 - **The client** is Microsoft's Windows App on the Mac, and nothing here starts
   it, stops it or knows whether it is running. It holds its own saved
-  credentials, its own keyboard handling and its own clipboard. It lives exactly
-  as long as the window is open.
+  credentials and its own keyboard handling. It lives exactly as long as the
+  window is open. Its clipboard redirection must be off: an image reaching the
+  Mac pasteboard while the client redirects towards the remote side deadlocks
+  the app, and only a full quit clears it. See
+  [docs/keyboard-and-clipboard.md](docs/keyboard-and-clipboard.md).
+- **The bridge** is the pair of processes that carries the clipboard instead:
+  `bin/desk-clip` on the Mac and `remote/clip-agent.py` in the session, talking
+  over the master. It speaks no RDP at all, which is why the client's deadlock
+  cannot reach it. `desk-tunnel` starts one per machine and reports it on a
+  `Clipboard:` line. Its log is `~/.cache/remote-claude-desk/clip.log`.
 - **The display** is the X display number the session runs on, such as `:150`.
   It is discovered per connection, never assumed. See `desk_remote_display`.
 - **A remote script** is a file in `remote/` that runs on the server, not on
-  the Mac. There are six: find the display, heal an orphan, push the layout, run
-  the server checks, re-offer a clipboard image as PNG, and a scroll probe kept
-  as an instrument. They reach the server one way only, through
-  `desk_remote_run`, which sends the file over the master and passes values as
-  environment assignments in front of the interpreter. They used to be text
-  inside the commands, where no parser could read them.
+  the Mac. There are seven: find the display, heal an orphan, push the layout,
+  run the server checks, own the clipboard selection, re-offer a clipboard image
+  as PNG, and a scroll probe kept as an instrument. The four a command calls
+  reach the server one way only, through `desk_remote_run`, which sends the file
+  over the master and passes values as environment assignments in front of the
+  interpreter. They used to be text inside the commands, where no parser could
+  read them. The other three arrive differently: `desk-clip` copies
+  `clip-agent.py` into the remote user's own cache directory and drives it over
+  stdin, while `clip-png.sh` and `scroll-probe.py` are put on the box by hand.
 - **The LaunchAgent** is `com.smk-labs.desk-tunnel.<host>`, written by
   `desk-tunnel --install`, one per Mac because two boxes are normal here. It
   holds nothing open. It re-runs `desk-tunnel` at login and every five minutes,
@@ -48,6 +59,7 @@ thing whose lifetime you guessed wrong.
 |---|---|
 | The client | you close the window |
 | The forward | the master goes away |
+| The bridge | it gives up after 10 failed reconnects, or you kill it. `desk-tunnel` starts a fresh one within five minutes |
 | The master | it is idle past `ControlPersist`, or you kill it |
 | The LaunchAgent | you run `desk-tunnel --uninstall` |
 | The session | the server reboots |
@@ -64,7 +76,10 @@ Four homes, and putting a value in the wrong one is the usual mistake.
 - **An environment variable** for anything true of one run only. `DESK_CONFIG`
   names a different config file, which is how one Mac drives two boxes.
   `DESK_SIZE` is read only by `desk-doctor`, to price the framebuffer against
-  the server's core count.
+  the server's core count. Environment variables are also the only way
+  `desk-clip` is configured at all: it is Python and cannot source `config.sh`,
+  so `DESK_HOST`, `DESK_SSH_SOCKET` and `DESK_DISPLAY` reach it as exported
+  variables, and it refuses to start if any of the three is empty.
 - **`lib/common.sh`** for behaviour, never for values: load the config, hold the
   SSH master, retry with a ceiling, discover the display, kill safely on the far
   side. If two commands need the same logic it goes here as a function, so no

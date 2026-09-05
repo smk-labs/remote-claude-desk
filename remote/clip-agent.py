@@ -2,7 +2,8 @@
 """Clipboard agent. Runs on the server, driven by desk-clip over the SSH master.
 
 Reads "SET <b64>" lines on stdin, owns the X CLIPBOARD selection through xclip,
-and prints "CLIP <b64>" when something else in the session copies. It never
+and prints "CLIP <b64>" (text) or "CLIPIMG <b64>" (a png) when something else
+in the session copies. It never
 echoes back a value it set itself, which is what stops the ping-pong.
 
 argv[1] is the X display to attach to.
@@ -60,9 +61,22 @@ while True:
     time.sleep(0.4)
     if time.time() < quiet[0]:
         continue
+    # Ask what is on offer before asking for it. The selection holds one thing
+    # at a time, so a picture copied in the session replaces the text, and
+    # reading UTF8_STRING from a picture returns nothing at all: this used to
+    # poll only text, and an image copied on the remote side simply never
+    # reached the Mac.
     try:
-        p = subprocess.run(["xclip", "-selection", "clipboard", "-t", "UTF8_STRING", "-o"], env=ENV,
+        t = subprocess.run(["xclip", "-selection", "clipboard", "-t", "TARGETS", "-o"], env=ENV,
                            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+        targets = t.stdout.decode("utf-8", "replace").split() if t.returncode == 0 else []
+    except Exception:
+        continue
+
+    kind = "image/png" if "image/png" in targets else "UTF8_STRING"
+    try:
+        p = subprocess.run(["xclip", "-selection", "clipboard", "-t", kind, "-o"], env=ENV,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
         cur = p.stdout if p.returncode == 0 else b""
     except Exception:
         continue
@@ -73,5 +87,6 @@ while True:
         last = cur
         continue
     last = cur
-    sys.stdout.write("CLIP " + base64.b64encode(cur).decode() + "\n")
+    verb = "CLIPIMG " if kind == "image/png" else "CLIP "
+    sys.stdout.write(verb + base64.b64encode(cur).decode() + "\n")
     sys.stdout.flush()

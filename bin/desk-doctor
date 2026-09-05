@@ -115,9 +115,12 @@ done
 # The clipboard image shim lives on the server, not here, so what this can check
 # is that the repo still ships it. remote/check.sh asks the server whether it is
 # actually running.
+# Dormant while the RDP clipboard is off, because the bridge delivers png
+# directly and there is no BMP to convert. It matters again the moment anyone
+# turns the channel back on, so its absence is worth a word, not an alarm.
 [ -x "$ROOT/remote/clip-png.sh" ] \
-  && ok "the clipboard image shim is in remote/" \
-  || bad "remote/clip-png.sh is missing, so pasted images will not appear"
+  && ok "the clipboard image shim is in remote/ (dormant while RDP's channel is off)" \
+  || warn "remote/clip-png.sh is missing, so images would not paste if RDP's clipboard were on"
 
 [ -d "$DESK_SHARE" ] \
   && ok "shared folder $DESK_SHARE" \
