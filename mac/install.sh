@@ -2,9 +2,10 @@
 # Install the macOS side of remote-claude-desk.
 #
 # Four small things, none of them clever:
-#   1. put desk-doctor and desk-tunnel on your PATH
-#   3. offer the Karabiner rules to Karabiner, without editing its config
-#   4. tell you what is missing
+#   1. check what is missing
+#   2. put desk-doctor and desk-tunnel on your PATH
+#   3. build bin/desk-pbio, which is how the clipboard bridge reads images
+#   4. offer the Karabiner rules to Karabiner, without editing its config
 #
 # Safe to run again. Nothing here installs software and nothing here writes
 # outside your home directory.
