@@ -7,6 +7,19 @@ reasoned about rather than seen.
 It is here because the wrong diagnoses cost more time than the bugs did. Each
 one passed a test first.
 
+## Note, 2026-09-05: the FreeRDP client is gone, this page is not
+
+The Mac no longer runs an RDP client of its own. `sdl-freerdp`, the `desk`
+command that drove it, the clipboard bridge, the Keychain item and the menu bar
+app were all deleted on 2026-09-05, and you connect with Microsoft's Windows App
+now. Trap 11 below is why.
+
+Everything here is kept exactly as it was measured. Entries that name deleted
+files are deliberate: several of these traps are still live (the orphaned
+session, the display floor, the two xrdp version traps), and a wrong diagnosis
+is worth keeping even when the code it was about is gone. Read this page as a
+record, never as instructions.
+
 ## The instruments
 
 Three tools, each picked because the obvious one lies.

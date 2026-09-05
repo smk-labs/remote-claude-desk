@@ -2,7 +2,7 @@
 # Install the macOS side of remote-claude-desk.
 #
 # Four small things, none of them clever:
-#   1. put the desk commands on your PATH
+#   1. put desk-doctor and desk-tunnel on your PATH
 #   3. offer the Karabiner rules to Karabiner, without editing its config
 #   4. tell you what is missing
 #

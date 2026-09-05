@@ -1,5 +1,5 @@
 {
-  "title": "Mac keys inside a remote Linux desktop (FreeRDP)",
+  "title": "Mac keys inside a remote Linux desktop",
   "rules": [
     {
       "description": "RDP: Cmd+Q to Alt+F4 and Cmd+W to Ctrl+W",

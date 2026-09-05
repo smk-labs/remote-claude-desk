@@ -1,44 +1,51 @@
 # The Mac side
 
-Four small changes to your Mac so a Linux desktop feels like a Mac window.
+Two small changes to your Mac so a Linux desktop feels like a Mac window.
 
 ```sh
 ./mac/install.sh      # set it up
 ./mac/uninstall.sh    # take it back out
 ```
 
+The Mac used to run an RDP client of its own. It no longer does: you connect
+with Microsoft's Windows App, which brings its own credentials, keyboard
+handling and clipboard. What is left here is two commands and one keyboard file.
+
 ## What install.sh does
 
-It puts three commands on your PATH and drops two config files where macOS apps look for them.
+It puts two commands on your PATH and drops the Karabiner rules where Karabiner
+looks for them.
 
-- Links `bin/desk`, `bin/desk-doctor` and `bin/desk-tunnel` into `~/bin`, with absolute symlinks into this repo.
-- Refuses to overwrite a real file of the same name in `~/bin`, and says so instead.
-- Writes `~/.config/freerdp/sdl-freerdp.json`, backing up any existing file as `sdl-freerdp.json.bak-<stamp>`.
-- Copies `mac/karabiner-rules.json` to `~/.config/karabiner/assets/complex_modifications/remote-claude-desk.json`.
-- Reports what is missing (`sdl-freerdp` from `brew install freerdp`) and installs nothing on its own.
+- Links `bin/desk-doctor` and `bin/desk-tunnel` into `~/bin`, with absolute
+  symlinks into this repo.
+- Refuses to overwrite a real file of the same name in `~/bin`, and says so
+  instead.
+- Copies `mac/karabiner-rules.json` to
+  `~/.config/karabiner/assets/complex_modifications/remote-claude-desk.json`.
+- Reports what is missing, and installs nothing on its own.
 - Safe to re-run. It skips work that is already done.
+
+It does not write any client config, because the client is not ours.
 
 ## 1. The desk commands
 
-Three commands you type in a terminal, one to connect and two to fix things.
+Two commands you type in a terminal, one to connect and one to find out why you
+cannot.
 
-- `desk` connects: SSH master, port forward, keyboard layout, then FreeRDP.
+- `desk-tunnel` opens the SSH master, heals an orphaned session, forwards the
+  RDP port to `localhost`, and pushes your keyboard layout into the live X
+  session. Then it exits: it holds nothing open, the master does.
+- `desk-tunnel --install` writes a LaunchAgent, named after this machine, that
+  runs the same thing at login and every five minutes. `--uninstall` removes it.
 - `desk-doctor` checks both ends and tells you which one is broken.
-- `desk-tunnel` forwards the RDP port on its own, for when you want the tunnel without the window.
-- All three read `config.sh`, from `~/.config/remote-claude-desk/config.sh` first, then the repo.
+- Both read `config.sh`, from `~/.config/remote-claude-desk/config.sh` first,
+  then the repo. `DESK_CONFIG` names a different file, which is how one Mac
+  drives two boxes.
 
-## 2. The FreeRDP shortcut override
+## 2. The Karabiner rules
 
-One line of config so Shift+Enter reaches the app you are typing in.
-
-- FreeRDP's SDL client owns its own shortcuts, and the default modifier is Right Shift.
-- So Right Shift plus Enter toggled fullscreen, and Right Shift plus M minimised the window.
-- `SDL_KeyModMask` moves those onto Right Shift plus Right Alt plus Right Ctrl, which nobody presses by accident.
-- File: `~/.config/freerdp/sdl-freerdp.json`.
-
-## 3. The Karabiner rules
-
-Mac muscle memory, translated to Windows and Linux key combinations, but only inside the remote desktop window.
+Mac muscle memory, translated to Windows and Linux key combinations, but only
+inside the remote desktop window.
 
 | You press | You get | Rule |
 | --- | --- | --- |
@@ -57,32 +64,46 @@ Install copies the file. You enable the rules yourself:
 1. Open Karabiner-Elements, go to Complex Modifications, click Add rule.
 2. Enable the three rules under "Mac keys inside a remote Linux desktop".
 
-The script never edits your `karabiner.json`. That file holds every device, profile and rule you own, so a bad write there costs you your whole keyboard setup. The assets folder is Karabiner's own import door, and Karabiner rereads it on its own.
+The script never edits your `karabiner.json`. That file holds every device,
+profile and rule you own, so a bad write there costs you your whole keyboard
+setup. The assets folder is Karabiner's own import door, and Karabiner rereads
+it on its own.
 
-### The caveat, and why the Fn key has two routes
+### Which window the rules apply to
 
-Karabiner cannot always tell that the window in front is FreeRDP, so the Fn key is wired twice.
+Every rule is scoped to the RDP client and nothing else, by bundle identifier:
+`com.microsoft.rdc.macos`, `com.microsoft.rdc.mac` and
+`com.microsoft.WindowsApp`. Outside those windows your Mac keyboard is
+untouched.
 
-- `sdl-freerdp` is a bare binary with no app bundle, so `NSRunningApplication.bundleIdentifier` is nil for it.
-- Karabiner's usual `bundle_identifiers` condition therefore never matches, and the rules fall back to `file_paths`, which matches the binary path instead.
-- `file_paths` is the weaker test, so the rule can fail to fire.
-- Route one: the rule fires and Fn becomes Shift+Option, the Windows language switch.
-- Route two: the rule does not fire, Fn arrives as F18, and the server binds X keycodes 191 to 202 (F13 to F24) to `ISO_Next_Group`.
-- Two independent paths on purpose. Either one switches the language.
+That scoping used to be the weak part. The old client was a bare binary with no
+app bundle, so `NSRunningApplication.bundleIdentifier` was nil for it and the
+rules had to fall back to matching a file path. Windows App is an ordinary
+bundled app, so the strong test works and the `file_paths` fallback is gone.
 
-## 4. The menu bar app (optional)
+### Why the Fn key still has two routes
 
-A small icon in the menu bar that connects without a terminal.
+Fn is wired twice, and either route switches the language.
 
-- Build it with `bar/build`, which compiles `bar/desk-bar.swift` into `/Applications/Desk.app`.
-- Machines are listed one per line in `~/.config/desk-bar/machines`, as `name = command`.
-- `install.sh` does not build it. It is optional and takes a Swift compiler.
+- Route one: the Karabiner rule fires and Fn becomes Shift+Option, the Windows
+  language switch.
+- Route two: the rule does not fire, Fn arrives as F18, and the server binds X
+  keycodes 191 to 202 (F13 to F24) to `ISO_Next_Group`. That happens in
+  `remote/apply-layout.sh`, on every connect.
+
+The second route was added because the first could not be verified against a
+bundle-less binary. It costs one loop on the server and it stays: two
+independent paths to a key you press every few minutes is cheap insurance.
 
 ## Undoing it
 
 One script takes back exactly what the install script added.
 
-- `./mac/uninstall.sh` removes the `~/bin` symlinks, but only symlinks pointing into this repo.
-- It restores `sdl-freerdp.json` from the newest backup, or removes the file if there was no backup.
+- `./mac/uninstall.sh` removes the `~/bin` symlinks, but only symlinks pointing
+  into this repo.
 - It removes the Karabiner asset file.
-- Two things it deliberately leaves alone, and prints at the end: your Keychain password (`security delete-generic-password -s remote-claude-desk`) and any rules you already enabled in Karabiner's window (turn them off there).
+- It leaves alone any rules you already enabled in Karabiner's window. Removing
+  the file does not switch off a rule Karabiner has already copied into your own
+  config, so turn those off there.
+- It does not touch the LaunchAgent. That is `desk-tunnel --uninstall`, which
+  knows the label for this machine.

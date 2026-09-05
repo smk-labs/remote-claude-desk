@@ -85,7 +85,7 @@ else
   f "run server/install.sh"
 fi
 
-# Tools the bridge and the layout push need on the far side. Written as if/else
+# Tools the layout push and the clipboard shim need on the far side. Written as if/else
 # and not as `A && B || C`, because a `fix` line appended to that form runs
 # whichever way the test went, and hints then print under passing checks.
 need() { # need <command> <severity> <note-when-ok> <consequence> [fix]
@@ -96,10 +96,11 @@ need() { # need <command> <severity> <note-when-ok> <consequence> [fix]
     if [ -n "${5:-}" ]; then f "$5"; fi
   fi
 }
-need xclip     bad  "the clipboard bridge needs it" "text cannot cross"          "sudo apt install xclip"
+need xclip     bad  "the image clipboard shim needs it" "pasted images cannot cross" "sudo apt install xclip"
 need setxkbmap bad  ""                              "the keyboard layout cannot be set" "sudo apt install x11-xkb-utils"
 need xmodmap   warn ""                              "the Fn fallback route is unavailable"
-need python3   bad  ""                              "the clipboard agent cannot run"    "sudo apt install python3"
+need convert   bad  "the image shim converts with it"  "pasted images cannot cross" "sudo apt install imagemagick"
+need python3   warn ""                              "remote/scroll-probe.py cannot run"  "sudo apt install python3"
 
 # Orphaned sessions: an X server older than the sesman that is meant to track
 # it. This is the ERRINFO_LOGOFF_BY_USER failure, and it is invisible otherwise.
@@ -113,7 +114,7 @@ for pid in $(pgrep -u "$me" -x Xorg 2>/dev/null); do
     && orphans=$((orphans+1))
 done
 if [ "$orphans" -gt 0 ]; then
-  p bad "$orphans session(s) predate sesman and are orphaned, so every connect will die at once"; f "desk heals this automatically on the next run"
+  p bad "$orphans session(s) predate sesman and are orphaned, so every connect will die at once"; f "desk-tunnel heals this on its next run, which the LaunchAgent does every 5 minutes"
 elif [ "$live" -gt 0 ]; then
   p ok "$live live session(s), all tracked by the current sesman"
 else
@@ -138,6 +139,22 @@ if [ -n "$found" ]; then
     p ok "session display is :$found, owned by $me"
   fi
 fi
+
+# The two session helpers. Both are silent when absent, which is the whole
+# problem: the clipboard simply stops carrying images and the keyboard simply
+# comes up as plain "us", and neither says a word about why.
+for h in clip-png xrdp-layout; do
+  case "$h" in
+    clip-png)    what="pasted images will not appear" ;;
+    xrdp-layout) what="the session keyboard will stay plain us" ;;
+  esac
+  if [ -f "$HOME/.config/autostart/$h.desktop" ]; then
+    p ok "$h has an autostart entry"
+  else
+    p warn "$h has no autostart entry, so $what"
+    f "see server/README.md, section 'The two session helpers'"
+  fi
+done
 
 # Foreign displays, for context only.
 foreign=0

@@ -89,30 +89,6 @@ else
   ok "macOS has never recorded the client hanging"
 fi
 
-# One desk per machine. Two of them fight over the single seat an xrdp session
-# has: each kills the other's client, each reconnects, and what you see is a
-# desktop that keeps disconnecting for no reason it can name.
-#
-# Counting the processes is not enough, because desk forks subshells that carry
-# its own command line, so a healthy run looks like several. A desk that matters
-# is one whose parent is not also a desk, and one of those per live pid file is
-# correct. Anything beyond that is a desk running without the lock.
-all_desks="$(pgrep -f "[b]ash .*/bin/desk$" 2>/dev/null | tr '\n' ' ')"
-held=0
-for f in "$HOME/.cache/remote-claude-desk"/desk-*.pid; do
-  [ -f "$f" ] || continue
-  kill -0 "$(cat "$f" 2>/dev/null)" 2>/dev/null && held=$((held + 1))
-done
-tops=0
-for pid in $all_desks; do
-  parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
-  case " $all_desks " in *" $parent "*) continue ;; esac
-  tops=$((tops + 1))
-done
-if [ "$tops" -gt "$held" ]; then
-  warn "$tops desk process(es) running but only $held holding a lock, so two can fight over one session"
-  fix "desk --restart on the machine that is misbehaving"
-fi
 
 # Nothing on the Mac runs Python any more. It is the SERVER that needs it, for
 # remote/scroll-probe.py, and remote/check.sh asks about it there.
@@ -244,7 +220,7 @@ fi
 echo
 printf '%d ok, %d warnings, %d failures\n' "$PASS" "$WARN" "$FAIL"
 if [ "$FAIL" -gt 0 ]; then
-  echo "Fix the failures above, then run desk."
+  echo "Fix the failures above, then run desk-tunnel."
   exit 1
 fi
 [ "$WARN" -gt 0 ] && echo "Warnings are things that work but are worse than they could be."

@@ -9,7 +9,7 @@
 #
 # Everything here is a shell variable, so it is also overridable per run:
 #
-#     DESK_SIZE=2560x1600 desk
+#     DESK_CONFIG=~/.config/remote-claude-desk/config.other.sh desk-tunnel
 
 # ─── required ────────────────────────────────────────────────────────────────
 
@@ -51,9 +51,9 @@ DESK_LOCAL_PORT="${DESK_LOCAL_PORT:-33890}"
 #   server/install.sh --display-min <n>
 DESK_DISPLAY_MIN="${DESK_DISPLAY_MIN:-150}"
 
-# Pin the display instead of discovering it. Leave empty. `desk` asks the server
-# which display your session is actually on, which is right even when xrdp
-# hands out :151 after a failed :150. Set it only to debug a specific session.
+# Pin the display instead of discovering it. Leave empty. desk-tunnel asks the
+# server which display your session is actually on, which is right even when
+# xrdp hands out :151 after a failed :150. Set it only to debug one session.
 DESK_DISPLAY="${DESK_DISPLAY:-}"
 
 # ─── keyboard ────────────────────────────────────────────────────────────────
@@ -67,16 +67,16 @@ DESK_LAYOUTS="${DESK_LAYOUTS:-us,ir}"
 DESK_LAYOUT_TOGGLE="${DESK_LAYOUT_TOGGLE:-grp:alt_shift_toggle}"
 
 # ─── local paths ─────────────────────────────────────────────────────────────
-# Folder shared into the session as the "mac" drive. Files go through here.
+# Folder to share into the session. Add it in your RDP client's own folder
+# redirection; desk-tunnel prints the path to add. Files go through here.
 DESK_SHARE="${DESK_SHARE:-$HOME/RemoteShare}"
 
-# macOS Keychain item holding the Linux password for the RDP login. Created by
-# `desk setup`; read at connect time and fed to FreeRDP on stdin, so it never
-# appears in `ps` or in a file.
+# Nothing here stores your Linux password. The RDP client keeps its own saved
+# credentials.
 
 # ─── bringing the SSH master up ──────────────────────────────────────────────
-# Optional. Leave it empty and `desk` runs a plain `ssh -fNM`, which is right
-# whenever your key alone gets you in.
+# Optional. Leave it empty and desk-tunnel runs a plain `ssh -fNM`, which is
+# right whenever your key alone gets you in.
 #
 # Set it to a command if your server needs something else first: a TOTP prompt,
 # a hardware key, a VPN, a jump host. It is run with no arguments and must leave

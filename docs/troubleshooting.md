@@ -14,49 +14,45 @@ desk-doctor --local   # skip the checks that need the server
 - it exits non-zero when something is broken, so it also works in a script
 - every check below is a check it already makes, and most are a bug that really
   happened
-- every run of `desk` also appends to `~/.cache/remote-claude-desk/last.log`, so
-  a failure is diagnosable without reproducing it
+- if you installed the LaunchAgent, every run it makes lands in
+  `~/.cache/remote-claude-desk/tunnel-agent.log`, so a failure at login is
+  diagnosable without reproducing it
 
 ## Symptom table
 
 | What you see | What it actually is | What to do |
 | --- | --- | --- |
-| The client quits a few seconds after connecting. The log says `ERRINFO_LOGOFF_BY_USER` | Nobody logged off. A session outlived the sesman that tracked it, so every new connect starts a second session, which dies at once | Let `desk` heal it: its preflight kills any xrdp Xorg older than sesman. If it recurs, install the reaper from [../server/README.md](../server/README.md) |
-| The window opens, then the pointer becomes a spinner, macOS calls the client Not Responding, and the connection times out | SDL's Metal renderer. The client asks `CAMetalLayer` for a drawable on every flush and returns one per frame, so a frame with several damaged rectangles, which is any scroll, leaks the rest. Three leaks empty the pool and `nextDrawable` blocks for good | Fixed: `desk` runs SDL on OpenGL, which has no drawable pool. `DESK_RENDERER=metal` puts it back if you want to test a newer SDL. `desk-doctor` also reads macOS's own hang reports now and names the frame it stopped in |
+| The client quits a few seconds after connecting. The log says `ERRINFO_LOGOFF_BY_USER` | Nobody logged off. A session outlived the sesman that tracked it, so every new connect starts a second session, which dies at once | Let `desk-tunnel` heal it: it kills any xrdp Xorg older than sesman before it forwards the port, and does it again every five minutes once the LaunchAgent is installed. If it recurs, install the reaper from [../server/README.md](../server/README.md) |
+| The window stops repainting and macOS calls the client Not Responding | macOS samples an app that stops servicing its main thread and files a `.hang` report with every thread's stack in it | `desk-doctor` reads the newest report and prints the deepest frame that still names a subsystem. That is how the old FreeRDP client was caught blocking in `-[CAMetalLayer nextDrawable]`, which is why it was removed on 2026-09-05. Two reports sat on the disk for two days first |
 | A trackpad flick scrolls a whole page, and nothing on the Mac changes it | xorgxrdp before 0.10 made a full wheel click out of every RDP packet instead of accumulating the delta. Measured on this box with a passive grab: median 46 events per flick, 138 a second, where a real wheel sends 3 to 10. The Mac scroll slider and per-app scroll tools change the delta, which that driver never reads, so both do nothing | Upgrade to xorgxrdp 0.10+ with xrdp 0.10+. `desk-doctor` reports the version and says which side of the fix you are on |
 | Every connect fails with "No X displays are available" after an xrdp upgrade | xrdp 0.10 added `MaxDisplayNumber`, default 63. A display offset above it leaves an empty range, and the server log says so plainly: `no display in range (150 to 63)`. The client's message sounds like the box is full instead | Add `MaxDisplayNumber` above your offset to `[Sessions]` in sesman.ini. `desk-doctor` compares the two now |
-| Text pastes but an image never does: the cursor blinks and nothing happens | Two different faults, one after the other. On xrdp 0.9.24 the BMP arrived truncated and ImageMagick refused it outright. On 0.10.1 it arrives whole, but the clipboard offers `image/bmp` and nothing else, while Chromium, Electron and GTK all ask for `image/png` | Upgrade to xrdp 0.10+, then run `remote/clip-png.sh` in the session (it has an autostart entry). It converts a BMP-only clipboard to PNG and re-offers it |
+| Text pastes but an image never does: the cursor blinks and nothing happens | Two different faults, one after the other. On xrdp 0.9.24 the BMP arrived truncated and ImageMagick refused it outright. On 0.10.1 it arrives whole, but the clipboard offers `image/bmp` and nothing else, while Chromium, Electron and GTK all ask for `image/png` | Upgrade to xrdp 0.10+, then run `remote/clip-png.sh` in the session. It converts a BMP-only clipboard to PNG and re-offers it. Give it an autostart entry so it survives a logout: nothing in this repo writes one |
 | Having to run `desk-tunnel` before you can work | It does its job and exits by design: it holds nothing open, the SSH master does | `desk-tunnel --install` writes a LaunchAgent per machine: at login, then every 5 minutes. Every step in it is idempotent, so a re-run on a healthy setup is three cheap checks, and a re-run after a wifi drop is the repair |
-| Persian does not exist in the session and the Fn key does nothing, using a native client | Nothing pushed the layout. xrdp sets the session keymap from what the client announces, after xfce4-settings has had its say, so every session comes up as plain `us` whatever the server says | `desk-tunnel` pushes it now and prints whether it landed. On a first connect the session may not exist yet, so run it again once connected |
-| The window is Not Responding under load, but macOS filed no hang report | Priority, not a deadlock. A desk started from a background context runs niced, and a niced client does not fail, it falls behind. A real deadlock always leaves a `.hang` report; this leaves none | `desk` says so at startup and `desk-doctor` reports the client's nice. Nothing can lower it without root: quit and start from the menu bar app or a terminal |
-| The desktop keeps disconnecting a few seconds after it connects, over and over | Two `desk` processes. An xrdp session is one seat, so each one's client takes it from the other, and both reconnect. Ending the client was never enough: the desk that owned it just opened another | Fixed: one pid file per machine, and a new `desk` ends the old one before it starts. `desk-doctor` warns when more desks are running than hold a lock |
-| The server is green in `desk-doctor` but everything is slow | Not the same fault as the freeze above. The far side encodes every frame in software, so a wedged process holding a core, or a `DESK_SIZE` bigger than the cores can encode, shows up as lag | `desk-doctor` reports any process that has averaged 80% of a core, free memory, and the size priced against the core count |
-| The whole Mac stutters while a screenshot sits on the pasteboard | Fixed. `pbio kind` used to fetch the picture ten times a second to answer a question about its type, so every app queued behind the pasteboard server | Nothing to do. `test/test-common.sh` fails if the probe reads contents again |
-| Vertical stripes across the screen | 24 bit colour. The stride does not match xrdp's 4 byte framebuffer | Use `/bpp:32`, the default. Never 24. See [why-these-settings.md](why-these-settings.md) |
-| The connection dies immediately after you resize the window | xrdp 0.9.24 cannot survive a live resize. The log says `UPDATE_TYPE Bitmap [1] failed` | Nothing to fix. The size is fixed and `/smart-sizing` scales it. Do not add `/dynamic-resolution` |
-| Cmd+C, Cmd+V and Cmd+A do nothing inside the session | macOS sends Cmd as Super, and Linux ignores Super for copy and paste | Leave `DESK_CMD` at 1, so `desk` remaps Super to Left Ctrl inside the connection |
-| ASCII pastes fine, anything else arrives empty | The RDP clipboard channel drops non-ASCII silently. 54 bytes in, 0 bytes out | Use the bridge, which is the default. `DESK_CLIP=rdp` is what turns it off |
-| Nothing pastes at all, in either direction | The bridge never started, and the RDP channel is off by design, so text has no path | `desk` now warns when `bin/desk-clip` is missing. Run `desk-doctor`, then `mac/install.sh` |
-| Shift+Enter toggles fullscreen instead of reaching the app | FreeRDP's SDL client owns its own shortcuts, and their modifier defaults to Right Shift | Install `~/.config/freerdp/sdl-freerdp.json`, which moves them onto Right Shift plus Right Alt plus Right Ctrl |
+| Persian does not exist in the session and the Fn key does nothing | Nothing pushed the layout. xrdp sets the session keymap from what the client announces, after xfce4-settings has had its say, so every session comes up as plain `us` whatever the server says | `desk-tunnel` pushes it and prints whether it landed. On a first connect the session may not exist yet, so run it again once connected |
+| The tunnel was fine yesterday and today the client cannot reach it | The SSH master survived a network change. It still answers `-O check` while every channel through it is dead, so the forward is accepted and goes nowhere | Nothing to do by hand. `desk_forward` proves the port answers, and tears the master down and rebuilds it once when it does not |
+| The server is green in `desk-doctor` but everything is slow | The far side encodes every frame in software, so a wedged process holding a core, or a framebuffer bigger than the cores can encode, shows up as lag | `desk-doctor` reports any process that has averaged 80% of a core, free memory, and the size priced against the core count |
 | The keyboard layout will not switch | Either the layout push never landed, or it landed on the wrong X display | See below |
 | TLS handshakes fail and the client never gets a login screen | Ubuntu ships the `xrdp` user outside the `ssl-cert` group, so it cannot read its own `/etc/xrdp/key.pem` | `usermod -aG ssl-cert xrdp`. Before this, 70 of 98 error lines in `xrdp.log` were TLS |
+| The RDP login is refused whatever you type | The account may have no password at all. `adduser --disabled-password` makes one, and xrdp refuses it every time | `desk-doctor` reads `passwd -S` on the server and says which of the three states the account is in. Fix with `sudo passwd <user>` |
 | Claude Desktop asks you to sign in every time | No unlocked secret store in the session, so the app will not keep a session | Install with `--keyring`, which adds `pam_gnome_keyring` to `/etc/pam.d/xrdp-sesman` |
 | Claude Desktop cannot reach claude.ai at all | IP reputation on a shared cloud box, not your setup | See below |
 | Your work is gone after the server rebooted | The session survives everything except a server reboot | Nothing to fix. Closing the window, losing the network, sleeping the Mac and changing network all reconnect to the same session |
 
 ## When the layout will not switch
 
-Two different causes, and they need different answers. `desk` prints the display
-it found, so start there.
+Two different causes, and they need different answers. `desk-tunnel` prints the
+display it found and whether the layout landed, so start there.
 
 - **it landed on the wrong display.** The display used to be hardcoded. When a
   session fails to start, xrdp hands out the next number, and the layout push
   then targets a display that is not there. It is discovered now, by
   `desk_remote_display` in `lib/common.sh`
-- **`desk` said it could not confirm the layout after 12 tries.** xrdp writes
-  over the keymap after `xfce4-settings` does, so the push is retried and wants
-  three consecutive successes. If it still fails, check `setxkbmap` and
+- **`desk-tunnel` said it could not confirm the layout after 12 tries.** xrdp
+  writes over the keymap after `xfce4-settings` does, so the push is retried and
+  wants three consecutive successes. If it still fails, check `setxkbmap` and
   `xmodmap` exist on the server
+- **it said there was no session to push into.** That is the normal first-run
+  answer. Connect with your RDP client, then run `desk-tunnel` again
 - **the switch key does nothing.** Try Option+Shift by hand first. If that works
   and Fn does not, the Karabiner rule is not firing, and the F18 fallback route
   is what should catch it. See

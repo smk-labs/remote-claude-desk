@@ -30,6 +30,28 @@ It also does not install Claude Desktop for you, and it works perfectly well
 with no Claude anywhere: what it really ships is a Linux desktop from a Mac that
 behaves the way a Mac user expects.
 
+It is not an RDP client either, and no longer tries to be. You connect with
+Microsoft's Windows App, which keeps its own saved credentials, its own keyboard
+handling and its own clipboard. This repo used to drive FreeRDP's SDL client
+instead; that client froze, macOS recorded where, and the whole client layer was
+deleted on 2026-09-05. The measurements are in
+[docs/lessons.md](docs/lessons.md), trap 11.
+
+## Why the Mac still has a job
+
+One job, and it is the one thing that cannot move to the server.
+
+xrdp there listens on `127.0.0.77:33890`, never on `0.0.0.0:3389`, so the
+desktop is not reachable over the network at all. An SSH tunnel is the only way
+in, and a tunnel has to be built from the machine you are sitting at. That is
+what `desk-tunnel` does.
+
+While it is there, it does three more things that also have to happen from this
+side: it brings the SSH master up, clears an orphaned session before that
+session kills your next connect, and pushes your keyboard layout into the live
+X session, because xrdp sets the keymap from what the client announces and every
+session otherwise comes up as plain `us`.
+
 ## The problem it actually solves
 
 Point any RDP client at a stock xrdp box from a Mac and you get this. None of it
@@ -37,34 +59,22 @@ announces itself, which is what makes it expensive.
 
 | What you see | What it really is |
 |---|---|
-| Cmd+C, Cmd+V, Cmd+A do nothing | macOS sends Cmd as Super, which Linux ignores for copy and paste |
-| Persian, Arabic, Chinese, emoji paste as nothing at all | the RDP clipboard channel carries ASCII and silently drops the rest |
-| The client quits a few seconds after connecting | a session outlived the sesman that tracked it and is now untracked forever |
-| Vertical stripes across the screen | 24-bit colour, whose stride does not match xrdp's 4-byte framebuffer |
-| The connection dies right after you resize the window | xrdp cannot survive a live desktop resize |
-| Shift+Enter toggles fullscreen instead of reaching the app | the client's own shortcuts default to a Right Shift modifier |
+| The client quits a few seconds after connecting | a session outlived the sesman that tracked it, so every later connect starts a new one that dies at once |
+| Persian, or any second layout, does not exist in the session, and the Fn key does nothing | xrdp sets the session keymap from what the client announces, after `xfce4-settings` has had its say |
+| A trackpad flick scrolls a whole page | xorgxrdp before 0.10 made a full wheel click out of every RDP packet instead of accumulating the delta |
+| Every login fails with "No X displays are available" after an xrdp upgrade | xrdp 0.10 caps display numbers at 63 by default, and this setup puts them at 150 |
+| Text pastes but an image never does | xrdp offers a clipboard image as BMP and nothing else, while Chromium, Electron and GTK ask for PNG |
 | Home, End, word jump, Cmd+Q, Cmd+W all wrong | Mac text navigation has no equivalent on Linux |
-| Every TLS connection fails | Ubuntu ships the xrdp user outside the `ssl-cert` group, so it cannot read its own key |
+| Every TLS connection fails | Ubuntu ships the `xrdp` user outside the `ssl-cert` group, so it cannot read its own key |
+| Anyone else on the box can reach your login prompt | xrdp's default listener is `0.0.0.0:3389`, open to the machine and to the internet |
 
 Each row is one fix in this repo, and
 [docs/troubleshooting.md](docs/troubleshooting.md) is the symptom-first version
 of the same table.
 
-## When it will not come up
-
-`desk` closes a previous client and reconnects through a dropped tunnel on its
-own. When you want to force the issue anyway:
-
-```bash
-desk --restart
-```
-
-That tears down the client, the helpers and the SSH master, then starts clean.
-There is a clickable **Restart Desk** app in `~/Applications` that runs it.
-
 ## Quick start
 
-Three commands on the Mac, one on the server.
+Three lines on the Mac, one on the server.
 
 ```bash
 git clone https://github.com/smk-labs/remote-claude-desk.git
@@ -75,37 +85,51 @@ cp config.example.sh config.sh && $EDITOR config.sh
 Set `DESK_HOST` and `DESK_USER` in `config.sh`. Then, on the Linux box:
 
 ```bash
-./server/install.sh --user me
+sudo ./server/install.sh --user me
 ```
 
-Store the Linux password once, check everything, and connect:
+Check both ends, then open the tunnel:
 
 ```bash
-desk-setup && desk-doctor && desk
+desk-doctor && desk-tunnel
 ```
 
-`desk-doctor` is the important one. It checks about thirty preconditions across
+`desk-doctor` is the important one. It checks about forty preconditions across
 both machines and names the cause instead of leaving you to guess.
+
+`desk-tunnel` prints what to type into your RDP client when it is done. In
+Windows App, add a PC with:
+
+| Field | Value |
+|---|---|
+| PC name | `localhost:33890`, or whatever `DESK_LOCAL_PORT` says |
+| User account | your `DESK_USER` and its Linux password |
+| Folders | add `~/RemoteShare` to get the shared drive |
+
+Windows App saves the password itself, so nothing here stores one.
 
 ## The daily command
 
 ```bash
-desk
+desk-tunnel --install
 ```
 
-That is it. It brings the SSH master up if it is down, heals an orphaned session
-if it finds one, forwards the port, pushes your keyboard layout into the live X
-session, starts the clipboard bridge, and opens the window.
+Run that once per Mac and you never type anything again. It writes a LaunchAgent
+named after this machine that runs `desk-tunnel` at login and every five
+minutes: that is what rebuilds a master dropped by a wifi handoff, and what
+pushes the layout into a session that did not exist when you logged in. Every
+step inside is idempotent, so a re-run on a healthy setup is three cheap checks.
 
 | Command | What it does |
 |---|---|
-| `desk` | connect |
-| `desk --stop` | disconnect |
+| `desk-tunnel` | open the tunnel, heal an orphan, push the layout, once |
+| `desk-tunnel --install` | do that at login and every 5 minutes, for this machine |
+| `desk-tunnel --uninstall` | stop doing that |
 | `desk-doctor` | check every precondition on both machines |
-| `desk-setup` | store the Linux password in the macOS Keychain |
-| `desk-tunnel` | forward the port only, for a native RDP client |
+| `desk-doctor --local` | skip the checks that need the server |
 
-Per-run overrides live in `desk --help`. Machine settings live in `config.sh`.
+Machine settings live in `config.sh`. `DESK_CONFIG` names a different file, which
+is how one Mac drives two boxes.
 
 ## Recommended alongside
 
@@ -119,34 +143,31 @@ Two things make that real.
   accounts pays for a session, so hitting a limit on one does not stop the work.
   It runs on the same box, behind the same desktop.
 
-Neither is required. `desk` does not know or care whether either is installed.
+Neither is required. Nothing here knows or cares whether either is installed.
 
 ## How it is laid out
 
-One config file, five small commands, and two kinds of shared code: what runs
-on the Mac, and what runs on the server.
+One config file, two commands, and code split by which machine runs it.
 
 ```
 config.example.sh     the only file you edit
 lib/common.sh         config, SSH, display discovery, safe remote kill, retry
-lib/freerdp-args.sh   the FreeRDP command line, built from config alone
-bin/                  desk, desk-clip, desk-doctor, desk-setup, desk-tunnel
-remote/               the five scripts that run on the server
+bin/                  desk-tunnel, desk-doctor
+remote/               the six scripts that run on the server
 test/                 run, plus the checks it runs
-mac/                  install.sh, Karabiner rules, FreeRDP shortcut override
+mac/                  install.sh, uninstall.sh, the Karabiner rules
 server/               install.sh, the orphan reaper, the listener lock, the
                       isolated Claude Desktop launcher
-bar/                  optional macOS menu bar app
-docs/                 why each setting is what it is, and how it was measured
+docs/                 how each fix was measured, and which diagnoses were wrong
 ```
 
 - `remote/` holds every line that executes on the server. One function,
   `desk_remote_run` in `lib/common.sh`, sends a script over the SSH master and
   runs it there. Those scripts used to be text inside the commands, where no
   parser ever read them (see [docs/lessons.md](docs/lessons.md), trap 8)
-- `lib/` splits by kind. `common.sh` does things: load config, hold the master,
-  retry with a ceiling, kill safely on the far side. `freerdp-args.sh` decides
-  one thing and touches no network, which is what makes the flags testable
+- `lib/common.sh` is behaviour, never values: load the config, hold the master,
+  retry with a ceiling, kill safely on the far side. If two commands need the
+  same logic it goes here, so no caller can forget the part that bites
 
 ### Before you send a change
 
@@ -156,20 +177,31 @@ Run the tests first. They need a Mac and nothing else.
 test/run
 ```
 
-- 49 checks in about a second. No server, no SSH, no password, no window
-- they cover the FreeRDP flags, the shared library, and that every script in
+- 51 checks in about a second. No server, no SSH, no window
+- they cover the shared library, the config guard, and that every script in
   `remote/` still parses and is shellcheck clean
 
 ## Requirements
 
-Nothing exotic on either end, and no daemon is added to your Mac.
+Nothing exotic on either end, and no daemon is added to your Mac beyond the
+optional LaunchAgent.
 
-- **Mac:** macOS 13 or later, `brew install freerdp` (the SDL client, so XQuartz
-  is not needed), python3, and optionally Karabiner-Elements for the Mac keys
-- **Server:** Ubuntu 22.04 or 24.04, xrdp with xorgxrdp, XFCE, `xclip`,
-  `setxkbmap`, `xmodmap`, python3
+- **Mac:** macOS 13 or later, Microsoft's Windows App, and optionally
+  Karabiner-Elements for the Mac keys. `nc` and `ssh` ship with macOS
+- **Server:** Ubuntu 22.04 or 24.04, XFCE, `xclip`, ImageMagick, `setxkbmap`,
+  `xmodmap`, `python3`
+- **xrdp 0.10 or later, with xorgxrdp 0.10 or later.** Not optional. On 0.9.x a
+  trackpad flick scrolls about ten times too far, and a clipboard image arrives
+  truncated, so it cannot be converted at all
 - **Between them:** SSH key access, and a `~/.ssh/config` entry with
   `ControlMaster auto` so one connection is reused
+
+Ubuntu 24.04 ships xrdp 0.9.24. The 25.04 pair, xrdp 0.10.1 with xorgxrdp
+0.10.2, installs cleanly on it: every dependency resolves and the Xorg ABIs
+match. After that upgrade you must raise `MaxDisplayNumber` in `sesman.ini`,
+which 0.10 defaults to 63, below the display offset of 150. Miss it and every
+login fails with "No X displays are available". `desk-doctor` compares the two
+numbers and says so.
 
 ## Security
 
@@ -179,8 +211,10 @@ only, and you reach it through the SSH connection you already trust.
 - xrdp binds `127.0.0.77:33890`, not `0.0.0.0:3389`
 - an iptables OWNER rule limits even that to one uid, so other tenants on a
   shared box are refused
-- the RDP password sits in the macOS Keychain and is handed to FreeRDP on stdin,
-  so it never appears in `ps`, in a file, or in shell history
+- nothing here stores your Linux password. Windows App keeps its own saved
+  credentials, in its own store
+- `desk_load_config` refuses a `config.sh` that group or others can write to. The
+  file is sourced, so everything in it runs
 - on a shared box, the display floor and an ownership check stop the session
   ever attaching to another user's screen
 
@@ -189,15 +223,15 @@ only, and you reach it through the SSH connection you already trust.
 Both installers have a matching uninstaller, and neither deletes your data.
 
 ```bash
-./mac/uninstall.sh          # symlinks, FreeRDP override, Karabiner asset
+desk-tunnel --uninstall     # the LaunchAgent, on this Mac
+./mac/uninstall.sh          # the ~/bin symlinks and the Karabiner asset
 ./server/uninstall.sh       # restores every config from a timestamped backup
 ```
 
 ## Reading further
 
 - [docs/troubleshooting.md](docs/troubleshooting.md) start here when something breaks
-- [docs/keyboard-and-clipboard.md](docs/keyboard-and-clipboard.md) the four keyboard and clipboard fixes, and where each one lives
-- [docs/why-these-settings.md](docs/why-these-settings.md) why each connection flag is there, so nobody simplifies it back
+- [docs/keyboard-and-clipboard.md](docs/keyboard-and-clipboard.md) the keyboard and clipboard fixes, and where each one lives
 - [docs/isolation.md](docs/isolation.md) keeping the remote Claude Desktop away from a central `~/.claude`
 - [docs/lessons.md](docs/lessons.md) how every claim here was measured, which diagnoses were wrong, and what is still unverified
 - [mac/README.md](mac/README.md) and [server/README.md](server/README.md) what each installer touches

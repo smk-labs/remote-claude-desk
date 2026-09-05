@@ -1,43 +1,35 @@
 # Keyboard and clipboard
 
 Typing and pasting in the remote desktop behave the way they do on the Mac.
-Command keys work, a second keyboard layout works, one key switches language,
-and the clipboard carries non-ASCII text both ways. Outside that one window the
-Mac is unchanged.
+Mac text navigation works, a second keyboard layout works, one key switches
+language, and a copied image pastes. Outside that one window the Mac is
+unchanged.
 
-Run `desk` and all of this is applied for you.
+Run `desk-tunnel` and the keyboard half is applied for you. The clipboard half
+now lives entirely on the server.
 
-## Four problems, four homes
+## Three problems, three homes
 
-These are four independent problems, so they also fail independently. Knowing
-which fix lives where is the point of this page.
+These are independent problems, so they also fail independently. Knowing which
+fix lives where is the point of this page.
 
 | Problem | Fix lives in |
 | --- | --- |
-| Cmd+C, Cmd+V, Cmd+A, Cmd+Z do nothing | a FreeRDP flag in `bin/desk` |
 | Text keys (Home, End, word jump), Cmd+Q, Cmd+W, Fn | `mac/karabiner-rules.json` |
-| No second layout, no language key | `setxkbmap` and `xmodmap`, pushed per connection by `bin/desk` |
-| Non-ASCII text is dropped | `bin/desk-clip`, over the SSH master |
-| Shift+Enter toggles fullscreen | `~/.config/freerdp/sdl-freerdp.json` |
+| No second layout, no language key | `remote/apply-layout.sh`, pushed per connection by `desk-tunnel` |
+| Text pastes, an image never does | `remote/clip-png.sh`, running inside the session |
 
 Symptom first? Start at [troubleshooting.md](troubleshooting.md).
 
 ## The Command key
 
-macOS sends Cmd as the Super key, and Linux ignores Super for copy and paste.
-`desk` remaps it to Left Ctrl inside the connection only.
+Nothing in this repo remaps Cmd any more. The old FreeRDP client did it with a
+`/kbd:remap` flag, and that flag went with the client on 2026-09-05. Windows App
+does its own modifier handling.
 
-- flag: `/kbd:remap:0x15b=0x1d,remap:0x15c=0x1d`, on by default
-- the scancodes are not a guess. `sdl-freerdp /list:kbd-scancode` gives `0x15b`
-  VK_LWIN, `0x15c` VK_RWIN, `0x1d` VK_LCONTROL
-- `DESK_CMD=0 desk` sends Super through untouched
-- cost: the session never receives Super, so XFCE's Super shortcuts (the whisker
-  menu) are gone. Ctrl on the Mac keyboard still works
-
-It sits in the client and not in Karabiner for two reasons. It cannot leak out
-of this connection, so the Mac is untouched everywhere else. And it is
-downstream of everything, so it also catches a paste that another tool
-synthesises as a CGEvent, which a Karabiner rule never sees.
+So if a Cmd shortcut inside the session does not do what you expect, the answer
+is either in the client's own keyboard settings or in a Karabiner rule. It is
+not here.
 
 ## Karabiner
 
@@ -49,10 +41,8 @@ while the remote desktop window is in front.
 - rule names: `9 Essential Mac Navigation Keys to Windows`,
   `RDP: Cmd+Q to Alt+F4 and Cmd+W to Ctrl+W`,
   `Fn to Shift+Option (Win) and F18 (Mac)`
-- each `frontmost_application_if` block carries `"file_paths": ["sdl-freerdp"]`
-  beside its existing `bundle_identifiers`
-- `bundle_identifiers` alone could never match. `sdl-freerdp` is a bare binary
-  with no app bundle, so `NSRunningApplication.bundleIdentifier` is nil for it
+- every rule is scoped by bundle identifier: `com.microsoft.rdc.macos`,
+  `com.microsoft.rdc.mac`, `com.microsoft.WindowsApp`
 - the install script never edits your `karabiner.json`. That file holds every
   device, profile and rule you own, so one bad write costs your whole keyboard
   setup. The assets folder is Karabiner's own import door
@@ -63,24 +53,33 @@ about two of these rules is recorded in [lessons.md](lessons.md).
 ## A second layout, and the language key
 
 The server may already have two layouts configured, but the live X server comes
-up with only the first one. So `desk` pushes both back on every connect.
+up with only the first one. So the layout is pushed back on every connect.
 
 - xrdp sets the keymap from what the client announces, and it does that after
   `xfce4-settings` has had its say, so a server-side setting alone loses
-- `setxkbmap -layout "$DESK_LAYOUTS" -option "$DESK_LAYOUT_TOGGLE"`, in
-  `apply_layout` in `bin/desk`
+- `setxkbmap -layout "$LAYOUTS" -option "$TOGGLE"`, in `remote/apply-layout.sh`
+- `desk-tunnel` runs that script over the SSH master, on every connect and every
+  five minutes if you installed the LaunchAgent
 - bounded: 12 tries, 2 seconds apart, and it wants three consecutive successes
   before believing the answer, because the first one can land while xrdp is
   still writing over it
 - nothing is written to any server config. It is per connection, every time
+- `desk-tunnel` prints whether the layout landed, and says so plainly when there
+  was no session to push into yet. That case is normal on a first connect: run
+  it again once you are connected
 - switch key: **Fn**, or **Option+Shift** by hand
 - set `DESK_LAYOUTS="us"` in `config.sh` if you only want one layout. The toggle
   is then simply unused
 
+There is a second push on the server itself: `/usr/local/bin/xrdp-layout`, run
+from `reconnectwm.sh` and from an autostart entry, which covers a session that
+comes up without anyone running `desk-tunnel` first. Neither the script nor the
+entry is in this repo, and `server/install.sh` does not create them, so on a new
+box that is a step you do by hand.
+
 ### Why the Fn key has two routes
 
-Fn is wired twice on purpose, because the first route cannot be verified from
-here. Either one switches the language.
+Fn is wired twice, and either route switches the language.
 
 - route one: the Karabiner rule fires and Fn becomes Shift+Option, which is the
   Windows language switch
@@ -88,55 +87,59 @@ here. Either one switches the language.
   191 to 202 (F13 to F24) are bound to `ISO_Next_Group` by `xmodmap`
 - that whole range was empty and is unreachable from a Mac keyboard except
   through Karabiner, so claiming all twelve costs nothing and removes the guess
-  about which one Fn lands on
-- the reason for the second route: `file_paths` matching for a bundle-less
-  binary is reasoned, not measured. See [lessons.md](lessons.md)
+  about which one Fn lands on. Measured: keycode 196 flips the layout
+- the second route exists because the first could not be verified against the
+  old bundle-less client. Windows App is an ordinary bundled app, so route one
+  should now be the reliable one. Route two stays anyway: it is one loop on the
+  server, and it has already earned its place once
+
+### The Caps Lock unlatch
+
+`apply-layout.sh` clears a latched Caps Lock on every connect. A lock key can
+arrive as a press with no matching release when both ends are remapping
+modifiers, which leaves the lock half-applied in the session.
+
+- measured on 2026-09-03: `xset q` said "Caps Lock: on" and "LED mask: 00000001"
+  in the session while the Mac's own key was untouched
+- it fires only when X itself says the lock is on, so it cannot make anything
+  worse
+- the old client mirrored the session's LED state onto the Mac keyboard, which
+  is what made this baffling to diagnose. Whether Windows App mirrors LEDs the
+  same way has not been re-measured
 
 ## The clipboard
 
-The RDP clipboard channel carries ASCII and silently drops everything else, so
-text rides the SSH tunnel instead.
+Text crosses on xrdp's own clipboard channel, which is Windows App's clipboard
+talking to `xrdp-chansrv`. Nothing on the Mac is involved.
 
-Measured against a live session, reading the pasteboard through NSPasteboard so
-no shell locale could lie about it:
+This used to be a pair of processes over the SSH master, because the channel as
+FreeRDP drove it dropped every non-ASCII item silently. That bridge was deleted
+on 2026-09-05 with the rest of the client layer. The measurements that justified
+it are kept in [lessons.md](lessons.md).
 
-- `"ASCII-VIA-CLIPRDR-777"`, 21 bytes, arrives as 21 bytes, exact
-- Persian, 54 bytes, arrives as **0 bytes**. The X selection changes owner and
-  then serves nothing at all
-- `"ASCII-AGAIN-888"`, 15 bytes, exact. So the channel is not wedged, it simply
-  cannot carry that item
+### Images need one shim on the server
 
-FreeRDP says so itself in the log at exactly those moments:
+The channel hands an image to X as `image/bmp` and nothing else. Chromium,
+Electron and GTK ask for `image/png` and ignore BMP, so a paste looks like
+nothing happening at all: the cursor blinks and the app moves on, because the
+format it wanted was never offered.
+
+Measured on a live session, xrdp 0.10.1:
 
 ```
-[ERROR][com.winpr.clipboard] - [ClipboardGetData]: No synthesizer for format
-CF_RAW [0x00000000] --> text/plain [0x0000c000]
+TARGETS        -> TARGETS TIMESTAMP MULTIPLE image/bmp
+image/png      -> 0 bytes
+image/bmp      -> 15286 bytes, "PC bitmap, Windows 3.x, 68 x 56 x 32"
 ```
 
-`/clipboard:` has only `use-selection`, `direction-to` and `files-to`, so there
-is no encoding option to tune. Hence the bridge.
-
-- `desk` runs `-clipboard` and starts `bin/desk-clip`, which is base64 in,
-  base64 out over the SSH master, with no codepage anywhere in the path
-- leaving the RDP channel on as well is not an option. xrdp-chansrv and the
-  bridge both want to own the X CLIPBOARD selection, and chansrv wins often
-  enough to hand back the broken copy at random. One owner or none
-- `DESK_CLIP=rdp desk` puts the old behaviour back
-- text only. Images and files still go through the `/drive:mac` share
-- ceiling: `MAX_BYTES` is 2 MB, and anything larger is skipped with a log line
-- if `desk-clip` is not found, `desk` now says so on screen instead of starting
-  a session with no clipboard and no message
-
-## Shift+Enter
-
-This was the client eating the key, not Linux ignoring it. FreeRDP's SDL client
-owns its own shortcuts, and their modifier defaults to Right Shift.
-
-- proof, from `~/.cache/remote-claude-desk/last.log`:
-  `<KMOD_RSHIFT>+<SDL_SCANCODE_RETURN> pressed, toggling fullscreen state`
-- Right Shift plus M was minimise, Right Shift plus Enter was fullscreen
-- fix: `~/.config/freerdp/sdl-freerdp.json` sets `SDL_KeyModMask` to
-  `["KMOD_RSHIFT","KMOD_RALT","KMOD_RCTRL"]`, a combination nobody hits by
-  accident
-- source file: `mac/sdl-freerdp.json`. Delete the installed copy to put the old
-  behaviour back
+- `remote/clip-png.sh` watches the clipboard, converts a BMP-only offer with
+  ImageMagick, and re-offers it as PNG
+- it runs inside the session from an autostart entry. `server/install.sh` does
+  not write that entry, so it is set up on the box by hand
+- it cannot feed itself: once PNG is on the clipboard the BMP is gone with it,
+  so the condition is false and nothing is converted twice
+- it needs `xclip` and ImageMagick on the server. `desk-doctor` checks both
+- on xrdp 0.9.24 the same read produced a **truncated** BMP that ImageMagick
+  refused with "length and filesize do not match", so this shim could not have
+  worked then. It works because the bytes finally arrive whole on 0.10, which is
+  one of the two reasons that version floor is not negotiable
