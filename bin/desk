@@ -131,8 +131,22 @@ if holder="$(_lock_holder)"; then
   # bridge and its remote agent. KILL would leave both behind.
   kill -TERM "$holder" 2>/dev/null || true
   _holder_gone() { ! kill -0 "$holder" 2>/dev/null; }
-  desk_retry 10 1 1 -- _holder_gone \
-    || desk_warn "the previous desk (pid $holder) would not exit; expect the two to fight."
+
+  # Twenty seconds, not ten. The old desk's trap runs cleanup, and cleanup makes
+  # two ssh round trips to stop the remote clipboard agent, so a graceful exit is
+  # not instant on a slow link. Ten seconds was measured going off while the
+  # process was still perfectly busy shutting down, which printed a warning about
+  # a fight that was not happening.
+  #
+  # And if it really will not go, KILL it rather than carry on beside it. Its
+  # cleanup has already had its twenty seconds; carrying on is the one outcome
+  # this whole block exists to prevent, because two desks is the fight.
+  if ! desk_retry 20 1 1 -- _holder_gone; then
+    desk_warn "the previous desk (pid $holder) ignored TERM for 20s; killing it."
+    kill -KILL "$holder" 2>/dev/null || true
+    desk_retry 5 1 1 -- _holder_gone \
+      || desk_warn "pid $holder is still there even after KILL; expect the two to fight."
+  fi
 fi
 echo $$ > "$LOCK"
 
@@ -226,16 +240,27 @@ cleanup() {
   local p
   for p in "${HELPERS[@]:-}"; do kill "$p" 2>/dev/null || true; done
   HELPERS=()
-  # Only if it is still ours. A desk that took the lock from us has already
-  # written its own pid here, and removing that would let a third one in.
-  [ -n "${LOCK:-}" ] && [ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"
   # Belt and braces, in case a helper died without cleaning up after itself.
   # desk_remote_pkill brackets the pattern so it cannot match the ssh shell
   # that is running it, which used to kill the cleanup halfway through.
   desk_remote_pkill "deskclip-agent"
   desk_remote_pkill "xclip -selection clipboard"
 }
-trap cleanup EXIT INT TERM
+# Releasing the lock is NOT part of cleanup, and the difference is not academic.
+# The reconnect loop calls cleanup after every client, so putting the release in
+# there meant the first blip handed the lock back while this desk was still very
+# much alive and about to open another client. Found it live: one desk running,
+# reconnected once, and no pid file left for the next desk to collide with.
+#
+# So the release goes on the trap, which fires once, on the way out.
+_release_lock() {
+  [ -n "${LOCK:-}" ] || return 0
+  # Only if it is still ours. A desk that took the lock from us has already
+  # written its own pid here, and removing that would let a third one in.
+  [ "$(cat "$LOCK" 2>/dev/null)" = "$$" ] && rm -f "$LOCK"
+  return 0
+}
+trap 'cleanup; _release_lock' EXIT INT TERM
 
 # Wait for the session's X display to exist, then set up everything that needs
 # to talk to it.

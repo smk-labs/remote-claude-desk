@@ -241,3 +241,15 @@ contains "$desk_src" 'kill -TERM "$holder"' "desk ends the previous desk, not ju
 doctor_src="$(cat "$ROOT/bin/desk-doctor")"
 contains "$doctor_src" 'DiagnosticReports/sdl-freerdp*.hang' \
          "desk-doctor reads the hang reports macOS files about the client"
+
+# The lock is released on the way out, never by cleanup.
+#
+# cleanup runs after every client, because that is what the reconnect loop is
+# for. A release in there hands the lock back on the first network blip, while
+# the desk holding it is still alive and about to open another client, and the
+# next desk then walks straight in. Caught live: one desk, one reconnect, no pid
+# file left.
+cleanup_body="$(awk '/^cleanup\(\) \{/{f=1} f{print} /^\}/{if(f) exit}' "$ROOT/bin/desk")"
+lacks "$cleanup_body" 'rm -f "$LOCK"' "cleanup does not release the lock"
+contains "$desk_src" "trap 'cleanup; _release_lock' EXIT INT TERM" \
+         "the lock is released by the exit trap instead"
