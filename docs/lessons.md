@@ -422,6 +422,52 @@ Reading a trap is not the same as remembering it at the moment it applies. The
 tell was that `desk-pbio` and `pbpaste` disagreed: when two readers of the same
 bytes disagree, suspect the writer.
 
+## Trap 16: renaming the account got the only reachable address banned
+
+Renaming the desktop user from `moe` to `mo` worked. Two minutes later the box
+was unreachable on every port, from two different machines, and stayed
+unreachable across a reboot. Recovery needed the provider's console.
+
+**The mechanism.** Automation kept running while the account changed underneath
+it: a LaunchAgent re-runs `desk-tunnel` every five minutes, and it went on
+authenticating as `moe`, which no longer existed. fail2ban read a burst of
+failures for a nonexistent user as exactly what it is built to stop, and banned
+the address. The log is unambiguous:
+
+    07:25:14 fail2ban.actions [sshd] Ban 86.55.193.125
+    08:00:17 fail2ban.actions [sshd] Restore Ban 86.55.193.125
+
+**Why every guess was wrong.** The symptoms pointed away from the cause at every
+step, and each wrong turn cost real time:
+
+- *Refused, not timed out.* A REJECT looks like "nothing is listening", so the
+  first hour went on sshd and on the iptables service that had just been edited.
+- *ICMP still worked*, which reads as "the box is fine, the service is down".
+- *A reboot changed nothing*, which reads as "this is not a runtime rule". It was
+  the second line above: fail2ban persists bans and restores them on start.
+- *`ss -ltn` showed sshd listening on `*:9011`* from the console, which proves
+  the daemon is healthy and sends you looking outward, at the provider.
+- *`iptables -F` did nothing.* Ubuntu 24.04 is nftables underneath, and the
+  iptables command is a compatibility shim that flushes only its own tables.
+  `nft flush ruleset` restored access immediately, and that one word was the
+  whole difference between locked out and back in.
+
+**What it should have been.** Ask what changed and what would react to it.
+Renaming a login while anything still logs in as the old name produces
+authentication failures by design, and any box with fail2ban answers those by
+banning the source. That is one question, and it was available before the first
+probe.
+
+**Fixed here.** `/etc/fail2ban/jail.d/ignore-known.conf` now lists the addresses
+that reach this box, so the machine cannot ban the only route to itself. The
+lock service takes a numeric UID rather than a name, so a rename cannot leave it
+holding a rule about a user that is gone.
+
+**The general rule, worth more than the specific fix.** Before changing an
+identity a remote machine authenticates against, stop the automation that uses
+it. A five-minute timer is not idle: it is a client that will keep presenting
+the old credential until something decides it is an attacker.
+
 ## What is not verified
 
 - **The scroll fix was confirmed by feel, not by a second measurement.** The
