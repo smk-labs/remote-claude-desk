@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the macOS side of remote-claude-desk.
 #
-# Three small things, none of them clever:
+# Four small things, none of them clever:
 #   1. put desk-doctor and desk-tunnel on your PATH
 #   3. offer the Karabiner rules to Karabiner, without editing its config
 #   4. tell you what is missing
@@ -206,6 +206,6 @@ desk_say "What next:"
 desk_say "    cp $ROOT/config.example.sh $ROOT/config.sh"
 desk_say "    \$EDITOR $ROOT/config.sh     # set DESK_HOST and DESK_USER"
 desk_say "    desk-doctor                  # checks both ends"
-desk_say "    desk-tunnel                  # forward the port, then use your RDP client"
+desk_say "    desk-tunnel                  # open the tunnel, then connect with your RDP client"
 desk_say ""
 desk_say "Undo everything: $HERE/uninstall.sh"
