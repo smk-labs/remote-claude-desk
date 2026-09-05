@@ -150,10 +150,31 @@ esac
 desk_say ""
 
 # ---------------------------------------------------------------------------
-# 3. the Karabiner rules
+desk_say "3. The pasteboard helper"
+
+# desk-clip reads the Mac pasteboard through this rather than through pbpaste,
+# which speaks text only, so an image would be invisible to the bridge. pbpaste
+# also takes its encoding from the environment, which is how a Persian copy came
+# back as MacRoman (docs/lessons.md, trap 2).
+PBIO_SRC="$ROOT/mac/pbio.swift"
+PBIO_OUT="$ROOT/bin/desk-pbio"
+if ! command -v swiftc >/dev/null 2>&1; then
+  desk_say "   NOTE    swiftc is not here, so images will not cross. Install the"
+  desk_say "           Xcode command line tools:  xcode-select --install"
+elif [ -x "$PBIO_OUT" ] && [ "$PBIO_OUT" -nt "$PBIO_SRC" ]; then
+  desk_say "   ok      $PBIO_OUT is already built"
+elif swiftc -O -o "$PBIO_OUT" "$PBIO_SRC" 2>/dev/null; then
+  desk_say "   built   $PBIO_OUT"
+else
+  desk_say "   MISSING $PBIO_OUT would not build, so images will not cross"
+fi
+desk_say ""
+
+# ---------------------------------------------------------------------------
+# 4. the Karabiner rules
 # ---------------------------------------------------------------------------
 
-desk_say "3. Karabiner rules"
+desk_say "4. Karabiner rules"
 
 # The rules are copied into Karabiner's own import folder and never merged into
 # karabiner.json by hand. That file holds every device, profile and rule the

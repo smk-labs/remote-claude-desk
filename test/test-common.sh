@@ -47,7 +47,10 @@ lacks "pkill -f '$(_pattern_for deskclip-agent)'" "deskclip-agent" \
 #
 # Nothing is excluded any more. The two helpers that used to be, desk-clip and
 # desk-pbio, were found next to `desk` rather than typed, and both went with it.
-expected="$(cd "$ROOT/bin" && ls | sort | tr '\n' ' ')"
+# desk-clip and desk-pbio are found next to desk-tunnel rather than typed, so
+# neither belongs on PATH, and desk-pbio is built rather than committed so a
+# clean checkout does not have it.
+expected="$(cd "$ROOT/bin" && ls | grep -vE '^(desk-clip|desk-pbio)$' | sort | tr '\n' ' ')"
 actual="$(printf '%s ' $(printf '%s\n' $DESK_COMMANDS | sort))"
 is "$actual" "$expected" "DESK_COMMANDS lists every command in bin/"
 
@@ -168,8 +171,10 @@ lacks "$tunnel_code" 'setsid' "desk-tunnel does not reach for setsid on macOS"
 #
 # So: assert the four lines that make a command a command. Any one of them
 # missing is a script that starts, prints something reassuring, and does nothing.
-for cmd in "$ROOT"/bin/*; do
-  name="$(basename "$cmd")"
+# $DESK_COMMANDS, not bin/*: desk-clip is Python and desk-pbio is a compiled
+# binary, so neither sources a shell library and neither is on PATH.
+for name in $DESK_COMMANDS; do
+  cmd="$ROOT/bin/$name"
   src="$(cat "$cmd")"
   contains "$src" 'set -uo pipefail'        "$name sets the shell options"
   contains "$src" '. "$ROOT/lib/common.sh"' "$name sources the library"
@@ -181,8 +186,8 @@ done
 # Found by running `desk-tunnel --help`, not by reading it: the last line still
 # said "exactly as it is for desk". Every grep in this suite had passed, because
 # they all look for what should be present and none looked for what should not.
-for cmd in "$ROOT"/bin/*; do
-  name="$(basename "$cmd")"
+for name in $DESK_COMMANDS; do
+  cmd="$ROOT/bin/$name"
   # Comments are stripped first. A comment saying what `desk` used to do is the
   # house style and the reason half this repo is readable; a STRING that tells
   # someone to run it is a lie. Only the second kind is a bug.
@@ -196,3 +201,21 @@ for cmd in "$ROOT"/bin/*; do
           | grep -cE '(^|[^-a-zA-Z_/])desk([^-a-zA-Z_]|$)')"
   is "$hits" "0" "$name names no deleted command"
 done
+
+# --- the clipboard bridge carries the direction RDP must not -----------------
+#
+# Windows App deadlocks when an image reaches the Mac pasteboard while it is
+# redirecting the clipboard towards the remote side: a screenshot is enough, and
+# it then refuses to reopen the session until the whole app is quit. Known bug,
+# unfixed as of 11.4.0. The client is set to "Remote to Local" only, so the Mac
+# to remote direction has no carrier over RDP at all, and desk-clip is it.
+tunnel_src="$(cat "$ROOT/bin/desk-tunnel")"
+contains "$tunnel_src" '"$ROOT/bin/desk-clip"' "desk-tunnel starts the clipboard bridge"
+contains "$tunnel_src" 'Clipboard: ${bridge_note}' "desk-tunnel says what the bridge did"
+lacks "$tunnel_src" 'DESK_CLIP' "the bridge is not optional any more, so no knob gates it"
+[ -x "$ROOT/bin/desk-clip" ] \
+  && ok "desk-clip is present" \
+  || bad "desk-clip is missing, so nothing carries the Mac to remote clipboard"
+[ -f "$ROOT/mac/pbio.swift" ] \
+  && ok "the pasteboard reader source is present" \
+  || bad "mac/pbio.swift is missing, so images cannot cross"
