@@ -278,3 +278,14 @@ contains "$desk_src" '"$BIN/desk-clip" --for "$DESK_HOST:$DESK_LOCAL_PORT"' \
 contains "$desk_src" 'pkill -f "[d]esk-clip --for .*:${DESK_LOCAL_PORT}' \
          "--restart ends only this machine's bridge"
 lacks "$desk_src" 'pkill -f "[d]esk-clip" ' "--restart no longer kills every bridge"
+
+# --- the swap must not block the main thread --------------------------------
+#
+# Measured on a window that was actually frozen, at nice 0, on the OpenGL
+# renderer: of 2391 main-thread samples inside drawToWindows, 1332 were parked in
+# SDL_RenderPresent -> Cocoa_GL_SwapWindow -> CGLFlushDrawable. The client
+# presents once per update from the server, and a swap that waits for the display
+# costs a whole frame each time, so any burst of updates queues presents faster
+# than they drain. A click does it; a scroll does it every time.
+contains "$desk_src" 'export SDL_RENDER_VSYNC=' "desk decides whether the swap waits for the display"
+contains "$desk_src" '${DESK_VSYNC:-0}' "desk defaults that wait to off"

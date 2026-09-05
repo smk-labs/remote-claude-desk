@@ -49,6 +49,7 @@ Per-run knobs, all optional:
   DESK_GFX=1              try the EGFX codec
   DESK_GDI=sw             software rendering
   DESK_RENDERER=metal     draw with Metal again (it deadlocks; see the comment)
+  DESK_VSYNC=1            wait for the display on every frame (this is the freeze)
   RDP_TUNE=1              bandwidth-saving flags
 
 Settings that belong to the machine, not the run, live in config.sh.
@@ -258,9 +259,27 @@ export SDL_VIDEO_MAC_FULLSCREEN_SPACES="${DESK_SPACES:-1}"
 # one word away for anyone who wants to check whether a newer SDL has fixed it.
 export SDL_RENDER_DRIVER="${DESK_RENDERER:-opengl}"
 
+# Do not block the main thread on the buffer swap. This is the top frame in the
+# sample taken while the window was actually frozen, at normal priority, on the
+# OpenGL renderer, so it is measured rather than reasoned:
+#
+#   2391 samples in drawToWindows
+#     1332  SDL_RenderPresent -> Cocoa_GL_SwapWindow -> CGLFlushDrawable   <- 56%
+#      885  drawScaledRects -> drawScaledRect -> SDL_UpdateTexture         <- 37%
+#
+# The client presents once per update from the server, and a swap that waits for
+# the display costs a whole frame each time. Scrolling sends updates faster than
+# the display refreshes, so the presents queue, the main thread parks in the
+# swap, and macOS calls the window Not Responding. The pointer is a spinner
+# because the thread that would move it is inside CGLFlushDrawable.
+#
+# Turning the wait off does not drop frames that were going to be seen: nothing
+# is being animated here, the picture is whatever the far side last sent.
+export SDL_RENDER_VSYNC="${DESK_VSYNC:-0}"
+
 desk_say "log: $LOG"
 desk_log "args: ${ARGS[*]}"
-desk_log "renderer: $SDL_RENDER_DRIVER"
+desk_log "renderer: $SDL_RENDER_DRIVER, vsync $SDL_RENDER_VSYNC"
 
 # ─── helpers that live exactly as long as the client ─────────────────────────
 HELPERS=()
