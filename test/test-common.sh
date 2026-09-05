@@ -119,20 +119,12 @@ is "$swift_default" "$shell_default" "the menu bar and desk agree on the default
 # list, so nothing ever linked it. Comparing the list against the directory is
 # the only check that catches the next one, because a list that is merely
 # self-consistent is still wrong when a file is added beside it.
-# desk-clip and desk-pbio are both found beside `desk` rather than typed, so
-# neither belongs on PATH. desk-pbio is also built rather than committed, so a
-# clean checkout does not have it and this list must not require it.
-expected="$(cd "$ROOT/bin" && ls | grep -vE '^(desk-clip|desk-pbio)$' | sort | tr '\n' ' ')"
+#
+# Nothing is excluded any more. The two helpers that used to be, desk-clip and
+# desk-pbio, were found next to `desk` rather than typed, and both went with it.
+expected="$(cd "$ROOT/bin" && ls | sort | tr '\n' ' ')"
 actual="$(printf '%s ' $(printf '%s\n' $DESK_COMMANDS | sort))"
-is "$actual" "$expected" "DESK_COMMANDS lists every command in bin/ except the helpers"
-
-# desk-clip is left out on purpose, and saying so here stops someone "fixing" it.
-for helper in desk-clip desk-pbio; do
-  case " $DESK_COMMANDS " in
-    *" $helper "*) bad "$helper is on PATH, but it is meant to be found next to desk" ;;
-    *) ok "$helper is deliberately not on PATH" ;;
-  esac
-done
+is "$actual" "$expected" "DESK_COMMANDS lists every command in bin/"
 
 # --- desk_load_config refuses a config anyone else can write -----------------
 # It is SOURCED, so everything in it runs.
@@ -196,23 +188,6 @@ is "$got" "$tmp/other.sh" "the file it reports is the file it loaded"
 HOME="$HOME_BEFORE"
 rm -rf "$tmp"
 
-# --- the pasteboard probe must never fetch the pasteboard -------------------
-#
-# `pbio kind` is asked ten times a second, forever. It used to answer by
-# fetching the contents: imageData() pulled the whole picture out of the
-# pasteboard server, and re-encoded a PNG from TIFF when the copy was a
-# screenshot, only to throw it away and print the word "image". Ten full copies
-# a second out of one shared service is what made every other app on the Mac
-# beachball, and it survived the commit that was meant to fix it, because that
-# one only stopped the transfer and left the probe alone.
-#
-# So the guard is on the probe, not on the transfer: the kind branch may read
-# the type list and nothing else.
-kind_branch="$(awk '/^case "kind":/{f=1;next} /^case /{f=0} f' "$ROOT/mac/pbio.swift")"
-lacks "$kind_branch" "imageData()" "pbio kind does not fetch the image"
-lacks "$kind_branch" "pb.string(" "pbio kind does not fetch the text"
-contains "$(cat "$ROOT/mac/pbio.swift")" "pb.types" "pbio decides the kind from the type list"
-
 # --- macOS already knows why the client froze --------------------------------
 doctor_src="$(cat "$ROOT/bin/desk-doctor")"
 contains "$doctor_src" 'DiagnosticReports/sdl-freerdp*.hang' \
@@ -247,8 +222,6 @@ contains "$tunnel_src" 'Keyboard: ${layout_note}' "desk-tunnel says whether the 
 # header declares more bytes than arrive. ImageMagick refuses it outright with
 # "length and filesize do not match", so text crosses on that channel and
 # pictures only look like they do.
-contains "$tunnel_src" 'desk-clip' "desk-tunnel starts the clipboard bridge"
-contains "$tunnel_src" 'Clipboard: ${bridge_note}' "desk-tunnel says what the bridge did"
 contains "$tunnel_src" 'com.smk-labs.desk-tunnel.$DESK_HOST' "the LaunchAgent is named per machine"
 # macOS ships no setsid. The first version used it and failed with "command not
 # found" into a log nobody was watching, which is this repo's whole bad habit in

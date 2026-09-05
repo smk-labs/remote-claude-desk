@@ -180,9 +180,12 @@ done
 
 # The whole reason the symlink is resolved before dirname. A stale link that
 # resolves nowhere used to mean a session with no clipboard and no message.
-[ -x "$ROOT/bin/desk-clip" ] \
-  && ok "desk-clip is next to desk" \
-  || bad "desk-clip is missing from $ROOT/bin, so text will not cross"
+# The clipboard image shim lives on the server, not here, so what this can check
+# is that the repo still ships it. remote/check.sh asks the server whether it is
+# actually running.
+[ -x "$ROOT/remote/clip-png.sh" ] \
+  && ok "the clipboard image shim is in remote/" \
+  || bad "remote/clip-png.sh is missing, so pasted images will not appear"
 
 if security find-generic-password -s "$DESK_KEYCHAIN_SERVICE" -a "$DESK_USER" -w >/dev/null 2>&1; then
   ok "Keychain item '$DESK_KEYCHAIN_SERVICE' for '$DESK_USER'"

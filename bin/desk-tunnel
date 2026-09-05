@@ -10,20 +10,6 @@
 # Fn key did nothing. Measured on a live session reached this way:
 # `setxkbmap -query` said layout: us, and keycodes 191 to 202 were all empty.
 #
-# Still NOT set up by this, because both are FreeRDP-specific: the Cmd remap
-# (`desk` passes it as a client argument) and the clipboard bridge (the RDP
-# clipboard channel carries no Persian, which is why `desk` runs its own; a
-# native client uses its own clipboard, which handles Unicode).
-set -uo pipefail
-
-ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"
-# shellcheck source=../lib/common.sh
-. "$ROOT/lib/common.sh"
-
-desk_load_config "$ROOT"
-
-# ─── keep it up without being asked ──────────────────────────────────────────
-#
 # desk-tunnel does its work and exits, which is right: it holds nothing open,
 # the SSH master does. But that means something has to run it, and "run it
 # yourself, every time, before you can work" is not a design, it is a chore.
@@ -135,49 +121,9 @@ if display="$(desk_remote_display 2>/dev/null)" && [ -n "$display" ]; then
   fi
 fi
 
-# ─── the clipboard bridge, which never was FreeRDP-specific ─────────────────
-#
-# desk-clip is a pair of processes carrying the clipboard over the SSH master.
-# It does not know or care what is drawing the screen, so "a native client is on
-# its own" was wrong about this too. It is also the only path here that carries
-# an image, because what the RDP channel delivers on xrdp 0.9.24 is a BMP whose
-# header declares more bytes than arrive: ImageMagick refuses it with "length and
-# filesize do not match", so every app pasting it gets nothing. Text crosses on
-# that channel; pictures only look like they do.
-#
-# Started detached, because desk-tunnel exits and the bridge must not. Started
-# only if this machine has none, so the five-minute re-run heals a dead bridge
-# and does nothing to a live one. The --for marker is what makes "this machine"
-# answerable at all, since every bridge otherwise has the same command line.
-# Only when this machine is actually set to use the bridge. With DESK_CLIP=rdp
-# the session takes its clipboard from xrdp's own channel, and starting the
-# bridge as well puts two owners on the X CLIPBOARD selection, which is the race
-# documented in lib/freerdp-args.sh: chansrv wins often enough to hand back a
-# broken copy at random. One owner or none.
-bridge_note="not started: DESK_CLIP=${DESK_CLIP:-bridge}, so xrdp's own channel carries it"
-if [ "${DESK_CLIP:-bridge}" = "bridge" ] && [ -z "${display:-}" ]; then
-  bridge_note="not started: no session to attach one to"
-fi
-if [ "${DESK_CLIP:-bridge}" = "bridge" ] && [ -n "${display:-}" ]; then
-  if pgrep -f "[d]esk-clip --for .*:${DESK_LOCAL_PORT}\$" >/dev/null 2>&1; then
-    bridge_note="already running"
-  elif [ -x "$ROOT/bin/desk-clip" ]; then
-    # nohup, not setsid: macOS ships no setsid, and the first version of this
-    # line failed with "command not found" into a log nobody was watching, which
-    # is the exact silent-failure shape this repo keeps trying to stamp out.
-    DESK_DISPLAY="$display" nohup "$ROOT/bin/desk-clip" \
-      --for "$DESK_HOST:$DESK_LOCAL_PORT" </dev/null >>"$HOME/.cache/remote-claude-desk/clip.log" 2>&1 &
-    disown 2>/dev/null || true
-    bridge_note="started on $display (text and images, over SSH)"
-  else
-    bridge_note="desk-clip is not at $ROOT/bin/desk-clip"
-  fi
-fi
-
 cat <<INFO
 Tunnel up on 127.0.0.1:${DESK_LOCAL_PORT}
 Keyboard: ${layout_note}
-Clipboard: ${bridge_note}
 
 In your RDP client, add a PC:
   PC name    localhost:${DESK_LOCAL_PORT}
