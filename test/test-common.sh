@@ -302,3 +302,21 @@ contains "$desk_src" '${DESK_VSYNC:-0}' "desk defaults that wait to off"
 tunnel_src="$(cat "$ROOT/bin/desk-tunnel")"
 contains "$tunnel_src" 'desk_remote_run apply-layout.sh' "desk-tunnel pushes the keyboard layout too"
 contains "$tunnel_src" 'Keyboard: ${layout_note}' "desk-tunnel says whether the layout landed"
+
+# --- desk-tunnel keeps itself up and carries the clipboard ------------------
+#
+# The bridge was never FreeRDP-specific: it is a pair of processes over the SSH
+# master and does not know what draws the screen. It is also the only path that
+# carries an image, because xrdp 0.9.24's clipboard channel delivers a BMP whose
+# header declares more bytes than arrive. ImageMagick refuses it outright with
+# "length and filesize do not match", so text crosses on that channel and
+# pictures only look like they do.
+contains "$tunnel_src" 'desk-clip' "desk-tunnel starts the clipboard bridge"
+contains "$tunnel_src" 'Clipboard: ${bridge_note}' "desk-tunnel says what the bridge did"
+contains "$tunnel_src" 'com.smk-labs.desk-tunnel.$DESK_HOST' "the LaunchAgent is named per machine"
+# macOS ships no setsid. The first version used it and failed with "command not
+# found" into a log nobody was watching, which is this repo's whole bad habit in
+# one line. Comments are stripped first, because the comment explaining this is
+# allowed to name the thing it is warning about.
+tunnel_code="$(grep -v '^[[:space:]]*#' "$ROOT/bin/desk-tunnel")"
+lacks "$tunnel_code" 'setsid' "desk-tunnel does not reach for setsid on macOS"
