@@ -468,6 +468,40 @@ identity a remote machine authenticates against, stop the automation that uses
 it. A five-minute timer is not idle: it is a client that will keep presenting
 the old credential until something decides it is an attacker.
 
+## Trap 17: the RDP clipboard channel can deadlock the whole client
+
+Reported here and confirmed against Microsoft's own tracker: with Windows App
+fullscreen, taking a macOS screenshot to the clipboard freezes the session. The
+image never pastes, the clipboard stops working everywhere, and closing the
+window does not help. Only quitting Windows App entirely brings it back. It
+happens against a real Windows host too, so it is not xrdp and not XFCE.
+
+**The mechanism.** macOS puts the screenshot on the pasteboard. Windows App sees
+the change and offers it to the far side over CLIPRDR, the RDP clipboard
+channel. The transfer of a large image and the app's main thread end up waiting
+on each other, and the connection is wedged for as long as the process lives.
+Microsoft's own reports describe the same thing at 1.6 MB from Preview, and note
+it does not happen when sharing is set to Remote to Local only. Direction is the
+tell: the deadlock is on the Local to Remote path.
+
+**Why it looks like a network problem.** The session stops repainting, so the
+first instinct is the tunnel or the server. Nothing in either is involved. The
+giveaway is that reconnecting to the same session with the same config fails
+while the app is still running, and succeeds immediately after quitting it: a
+per-process wedge, not a per-connection one.
+
+**The setting that stops it** is `ClientSettings.DisableClipboardRedirection`
+in `com.microsoft.rdc.macos`. It is a real fix for the freeze and a blunt one
+for everything else: with the channel off, nothing crosses at all, in either
+direction, and `remote/clip-png.sh` has nothing left to convert.
+
+**The shape of a better answer, for whoever needs it next.** Carry the clipboard
+somewhere that cannot stall the display. That is what `bin/desk-clip` did before
+it was deleted on 2026-09-05: a pair of processes over the SSH master, text and
+images, entirely outside the RDP channel. A wedge there costs the clipboard and
+nothing else, because the thing that draws the screen is not in the path. It is
+in git history if it is ever wanted back.
+
 ## What is not verified
 
 - **The scroll fix was confirmed by feel, not by a second measurement.** The
