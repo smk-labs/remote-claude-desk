@@ -154,3 +154,24 @@ contains "$tunnel_src" 'com.smk-labs.desk-tunnel.$DESK_HOST' "the LaunchAgent is
 # allowed to name the thing it is warning about.
 tunnel_code="$(grep -v '^[[:space:]]*#' "$ROOT/bin/desk-tunnel")"
 lacks "$tunnel_code" 'setsid' "desk-tunnel does not reach for setsid on macOS"
+
+# --- every command still loads the library it depends on ---------------------
+#
+# The bug this replaces, and it was self-inflicted an hour before this test was
+# written: a regex meant to delete one stale paragraph from bin/desk-tunnel used
+# a non-greedy match across newlines, and it ran past the end of the comment and
+# swallowed `set -uo pipefail`, the ROOT assignment, the `. lib/common.sh` line
+# and the `desk_load_config` call with it. The file still parsed. shellcheck was
+# still clean. All 45 checks still passed, because every one of them greps the
+# file rather than running it. What it did at runtime was announce
+# "Tunnel up on 127.0.0.1:" with no port and forward nothing.
+#
+# So: assert the four lines that make a command a command. Any one of them
+# missing is a script that starts, prints something reassuring, and does nothing.
+for cmd in "$ROOT"/bin/*; do
+  name="$(basename "$cmd")"
+  src="$(cat "$cmd")"
+  contains "$src" 'set -uo pipefail'        "$name sets the shell options"
+  contains "$src" '. "$ROOT/lib/common.sh"' "$name sources the library"
+  contains "$src" 'desk_load_config "$ROOT"' "$name loads the config"
+done
