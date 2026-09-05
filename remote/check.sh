@@ -224,3 +224,44 @@ case "${SIZE:-}" in
     fi
     ;;
 esac
+
+# ─── the two xrdp version traps, both measured on this box ───────────────────
+#
+# One: scrolling. Before xorgxrdp 0.10 the mouse driver emitted a full wheel
+# click for every RDP packet instead of accumulating the delta and emitting one
+# per 120 units. A Mac trackpad sends a continuous stream, so a single flick
+# arrives as dozens of clicks. Measured here with a passive grab on the root
+# window, before the upgrade: 233 events over 5 gestures, median 46 per gesture,
+# 138 a second, 7 ms apart. A real wheel sends three to ten. Nothing on the Mac
+# can fix it, because the fault is the count and not the size: the macOS scroll
+# speed slider and a per-app scroll tool both change the delta, which this
+# version of the driver never reads.
+xorgxrdp_v="$(dpkg-query -W -f='${Version}' xorgxrdp 2>/dev/null | sed 's/^[0-9]*://')"
+case "$xorgxrdp_v" in
+  '') ;;
+  0.9.*|0.[0-8].*)
+    p bad "xorgxrdp $xorgxrdp_v turns every wheel packet into a click, so a trackpad flick scrolls ten times too far"
+    f "upgrade to xorgxrdp 0.10 or later, together with xrdp 0.10 or later" ;;
+  *) p ok "xorgxrdp $xorgxrdp_v accumulates wheel deltas (trackpad scrolling is sane)" ;;
+esac
+
+# Two: the display range. xrdp 0.10 added MaxDisplayNumber, default 63. A server
+# set up with a display offset above that gets "X server -- no display in range
+# (150 to 63) is available" on every connect, and the client says only "No X
+# displays are available", which sounds like the box is full and is not.
+if [ -r /etc/xrdp/sesman.ini ]; then
+  off="$(awk -F= '/^X11DisplayOffset=/{print $2; exit}' /etc/xrdp/sesman.ini)"
+  max="$(awk -F= '/^MaxDisplayNumber=/{print $2; exit}' /etc/xrdp/sesman.ini)"
+  case "${off:-}" in
+    ''|*[!0-9]*) ;;
+    *)
+      : "${max:=63}"
+      case "$max" in ''|*[!0-9]*) max=63 ;; esac
+      if [ "$off" -gt "$max" ]; then
+        p bad "X11DisplayOffset=$off is above MaxDisplayNumber=$max, so no session can ever start"
+        f "add MaxDisplayNumber=$(( off + 50 )) to [Sessions] in /etc/xrdp/sesman.ini"
+      else
+        p ok "display range $off to $max, so the offset fits"
+      fi ;;
+  esac
+fi

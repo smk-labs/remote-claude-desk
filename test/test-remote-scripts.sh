@@ -61,3 +61,18 @@ contains "$layout" 'xdotool key --clearmodifiers Caps_Lock' \
 # reports a green box that cannot draw the desktop it was asked for.
 contains "$(cat "$ROOT/remote/check.sh")" '${SIZE:-}' "check.sh reads SIZE from the environment"
 contains "$(cat "$ROOT/bin/desk-doctor")" 'SIZE=${DESK_SIZE:-' "desk-doctor sends DESK_SIZE to the server checks"
+
+# The two xrdp version traps, both hit on a live box in one evening.
+#
+# Scrolling: before xorgxrdp 0.10 the driver made a wheel click per RDP packet
+# instead of accumulating the delta. Measured with a passive grab on the root
+# window: median 46 events per trackpad flick, 138 a second. A real wheel sends
+# three to ten. No Mac-side setting can touch it, because both the system scroll
+# slider and a per-app scroll tool change the delta, which that driver never reads.
+#
+# Display range: xrdp 0.10 added MaxDisplayNumber, default 63, and a server with
+# an offset of 150 then fails every connect with a message the client renders as
+# "No X displays are available", which sounds like the box is full.
+check_src="$(cat "$ROOT/remote/check.sh")"
+contains "$check_src" 'xorgxrdp_v="$(dpkg-query -W' "check.sh reads the xorgxrdp version"
+contains "$check_src" 'MaxDisplayNumber' "check.sh compares the display offset against the cap"
