@@ -10,9 +10,17 @@ one passed a test first.
 ## Note, 2026-09-05: the FreeRDP client is gone, this page is not
 
 The Mac no longer runs an RDP client of its own. `sdl-freerdp`, the `desk`
-command that drove it, the clipboard bridge, the Keychain item and the menu bar
-app were all deleted on 2026-09-05, and you connect with Microsoft's Windows App
-now. Trap 11 below is why.
+command that drove it, its FreeRDP argument builder and the menu bar app were
+all deleted on 2026-09-05, and you connect with Microsoft's Windows App now.
+Trap 11 below is why.
+
+The clipboard bridge did NOT go with them, and this sentence used to say it did,
+which is the kind of wrong that sends someone looking for a replacement.
+`desk-clip` is the opposite of client-specific: it is a pair of processes over
+the SSH master, it never speaks to the client, and that is exactly why it
+survives a client that deadlocks on its own clipboard (trap 17). The Keychain
+items are still there too; nothing in the code reads them any more, because
+Windows App keeps its own password.
 
 Everything here is kept exactly as it was measured. Entries that name deleted
 files are deliberate: several of these traps are still live (the orphaned
