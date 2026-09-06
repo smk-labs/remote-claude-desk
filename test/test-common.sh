@@ -319,3 +319,24 @@ contains "$clip_src" 'min(RETRY_WAIT * (2 ** n), RETRY_WAIT_MAX)' "it doubles, w
 contains "$doctor_src" 'head_ "Tunnel"' "desk-doctor has a section for the tunnel"
 contains "$doctor_src" 'is the old five-minute interval agent' "it catches an agent left in the old shape"
 contains "$doctor_src" 'desk_rdp_probe' "it proves the port carries RDP, not merely that it is open"
+
+# --- files cross as bytes, and arrive as a uri-list --------------------------
+#
+# The clipboard cannot carry a file the way it carries text: what sits on the
+# Mac pasteboard is a path on THIS machine, which means nothing on the far side.
+# So the bytes go over the SSH master and the session's clipboard is given the
+# paths they landed at, as text/uri-list, which is what a file manager and an
+# Electron app actually read.
+clip_src="$(cat "$ROOT/bin/desk-clip")"
+contains "$clip_src" 'def send_files' "desk-clip copies files rather than their paths"
+contains "$clip_src" 'COPYFILE_DISABLE' "the copy leaves macOS resource forks behind"
+contains "$clip_src" 'tail -n +21 | xargs -r rm -rf' "old drops are pruned, so copying does not fill the home directory"
+agent_src="$(cat "$ROOT/remote/clip-agent.py")"
+contains "$agent_src" 'text/uri-list' "the agent offers files as a uri-list"
+pbio_src="$(cat "$ROOT/mac/pbio.swift")"
+contains "$pbio_src" 'types.contains(.fileURL)' "the pasteboard reader recognises files"
+# Order matters: copying a picture in Finder puts a file url AND a preview image
+# on the pasteboard, and answering "image" there loses the file.
+files_first="$(awk '/func pasteboardKind/,/^}/' "$ROOT/mac/pbio.swift" | grep -n 'fileURL\|\.png' | head -1)"
+case "$files_first" in *fileURL*) ok "files are checked before images" ;;
+                       *) bad "images are checked first, so a copied picture file loses its path" ;; esac

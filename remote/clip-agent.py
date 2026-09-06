@@ -3,12 +3,14 @@
 
 Reads "SET <b64>" lines on stdin, owns the X CLIPBOARD selection through xclip,
 and prints "CLIP <b64>" (text) or "CLIPIMG <b64>" (a png) when something else
-in the session copies. It never
+in the session copies. "SETFILES <b64>" announces files that desk-clip has
+already placed on this machine, as a text/uri-list. It never
 echoes back a value it set itself, which is what stops the ping-pong.
 
 argv[1] is the X display to attach to.
 """
 import base64, os, subprocess, sys, threading, time
+from urllib.parse import quote
 DISP = sys.argv[1]
 ENV  = dict(os.environ, DISPLAY=DISP, XAUTHORITY=os.path.expanduser("~/.Xauthority"))
 owner = [None]      # the live `xclip -i` process
@@ -49,6 +51,24 @@ def reader():
             # through the RDP channel.
             try: set_clip(base64.b64decode(line[7:]), "image/png")
             except Exception as e: sys.stderr.write("agent setimg: %r\n" % (e,))
+        elif line.startswith("SETFILES "):
+            # A file paste, not a file copy. X has no notion of "the clipboard
+            # holds a file": what a file manager or an Electron app reads is
+            # text/uri-list, a list of file:// URIs. The bytes are already here,
+            # put down by desk-clip over the SSH master; this only announces
+            # where they landed.
+            try:
+                paths = base64.b64decode(line[9:]).decode().split("\n")
+                uris = []
+                for p in paths:
+                    if not p:
+                        continue
+                    p = os.path.expanduser(p)
+                    uris.append("file://" + quote(p))
+                if uris:
+                    set_clip(("\r\n".join(uris) + "\r\n").encode(), "text/uri-list")
+            except Exception as e:
+                sys.stderr.write("agent setfiles: %r\n" % (e,))
         elif line == "BYE":
             os._exit(0)
     os._exit(0)     # stdin closed: the Mac side is gone, so go with it rather

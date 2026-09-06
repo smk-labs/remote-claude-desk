@@ -58,16 +58,24 @@ import time
 # on the pasteboard was invisible to the bridge and could not cross.
 PBIO = os.path.join(os.path.dirname(os.path.realpath(__file__)), "desk-pbio")
 
-# argv is not read for settings, and that is deliberate. `desk` passes
-# "--for <host>:<port>" purely so that two bridges, one per machine, can be told
-# apart in `ps`. Nothing here parses it: the settings all arrive in the
-# environment, which is what main() checks for. Without the marker, the only way
+# argv carries one thing and one thing only: "--for <host>:<port>", passed by
+# desk-tunnel so two bridges can be told apart in `ps`. The port is read back
+# out of it below to answer "is anyone actually connected to my machine", which
+# is what stops two bridges fighting over the Mac pasteboard. Every actual
+# SETTING still arrives in the environment, which is what main() checks for. Without the marker, the only way
 # to end one machine's bridge was `pkill -f desk-clip`, which ended the other
 # machine's as well and left it running with a clipboard that had silently
 # stopped crossing.
 HOST = os.environ.get("DESK_HOST", "")
 SOCKET = os.environ.get("DESK_SSH_SOCKET", "")
 DISPLAY = os.environ.get("DESK_DISPLAY", "")
+# The port this machine's tunnel listens on, taken from the "--for host:port"
+# marker desk-tunnel passes for `ps` to tell two bridges apart. It is the only
+# thing here that knows which machine this bridge belongs to.
+LOCAL_PORT = ""
+for _i, _a in enumerate(sys.argv):
+    if _a == "--for" and _i + 1 < len(sys.argv) and ":" in sys.argv[_i + 1]:
+        LOCAL_PORT = sys.argv[_i + 1].rsplit(":", 1)[1]
 
 MAC_POLL = 0.10          # local and free, so poll it fast
 START_TIMEOUT = 20.0     # ceiling on bringing the agent up
@@ -95,6 +103,12 @@ PB_ENV["LC_ALL"] = "en_US.UTF-8"
 # comparison and turns any future version of that bug into a skipped item
 # instead of a hang.
 MAX_BYTES = 2 * 1024 * 1024
+# Files get their own ceiling, and a much larger one. The 2 MB above is about
+# what belongs in a CLIPBOARD selection; a file someone copied deliberately is a
+# different thing, and 64 MB covers a document or a short video without letting
+# a stray Downloads folder selection saturate the SSH master the desktop's own
+# pixels travel on.
+MAX_FILE_BYTES = 64 * 1024 * 1024
 
 
 def log(msg):
@@ -150,6 +164,55 @@ def start_agent():
     return None
 
 
+def send_files(paths):
+    """Copy files to the server over the SSH master, return their remote paths.
+
+    One tar over one ssh, rather than a copy per file. tar takes -C more than
+    once, so a selection spanning several folders still travels in a single
+    round trip, and it carries the names as bytes: a filename with a space, a
+    quote or Persian in it needs no quoting anywhere in this function, which is
+    the part that would otherwise break first.
+    """
+    total = 0
+    for p in paths:
+        try:
+            total += os.path.getsize(p)
+        except OSError:
+            return None, "cannot read %s" % os.path.basename(p)
+    if total > MAX_FILE_BYTES:
+        return None, "%d MB is over the %d MB limit" % (
+            total // (1 << 20), MAX_FILE_BYTES // (1 << 20))
+
+    stamp = "%d" % int(time.time() * 1000)
+    remote_dir = "%s/clip/%s" % (AGENT_DIR, stamp)
+
+    args = []
+    for p in paths:
+        args += ["-C", os.path.dirname(p) or "/", os.path.basename(p)]
+
+    # COPYFILE_DISABLE, because macOS tar otherwise packs an AppleDouble
+    # "._name" beside every file to carry resource forks and Finder metadata.
+    # Nothing on Linux wants them, and they arrive as visible junk next to the
+    # file the person actually copied.
+    tar = subprocess.Popen(["tar", "-cf", "-"] + args,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           env=dict(os.environ, COPYFILE_DISABLE="1"))
+    # Prune while we are here, in the same round trip. Every copy leaves a
+    # directory behind, and nothing else would ever remove them: the twentieth
+    # oldest and beyond go, which keeps a session's recent pastes usable and
+    # stops a year of copying from filling the home directory.
+    r = ssh(["mkdir -p ~/%s && tar -C ~/%s -xf - && "
+             "ls -1dt ~/%s/clip/*/ 2>/dev/null | tail -n +21 | xargs -r rm -rf"
+             % (remote_dir, remote_dir, AGENT_DIR)],
+            stdin=tar.stdout, timeout=120)
+    tar.stdout.close()
+    tar.wait()
+    if r.returncode != 0:
+        return None, "the copy failed (ssh rc=%s)" % r.returncode
+
+    return ["~/%s/%s" % (remote_dir, os.path.basename(p)) for p in paths], None
+
+
 def pump(ag):
     """Carry the clipboard both ways until the agent goes away.
 
@@ -167,6 +230,29 @@ def pump(ag):
     warned = {"big": None}
     lock = threading.Lock()
 
+    def connected():
+        """Is a client actually attached to THIS machine's tunnel right now.
+
+        Two machines means two bridges, and both of them write the same Mac
+        pasteboard. Left ungated they fight: a copy inside machine A lands on
+        the Mac, machine B's bridge sees the Mac change and pushes it into B,
+        B's agent reports it back, and the pasteboard ends up holding whichever
+        of them wrote last. Measured as exactly that, with one machine showing a
+        stale selection and the Mac briefly holding nothing at all.
+
+        The Mac to remote direction is safe from both: sending the same thing to
+        two machines is what you want. It is only the way back that needs an
+        owner, and the honest owner is the machine you are actually looking at.
+        An established connection on the forwarded port is that, and nothing
+        else has to be configured or guessed.
+        """
+        try:
+            r = subprocess.run(["lsof", "-nP", "-iTCP:%s" % LOCAL_PORT, "-sTCP:ESTABLISHED"],
+                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=5)
+            return b"ESTABLISHED" in r.stdout
+        except Exception:
+            return True    # cannot tell: behave as before rather than go silent
+
     def from_remote():
         for line in ag.stdout:
             if line.startswith(b"CLIPIMG "):
@@ -182,6 +268,12 @@ def pump(ag):
             if len(data) > MAX_BYTES:
                 log("remote clipboard is %d bytes, over the limit; ignoring"
                     % len(data))
+                continue
+            if not connected():
+                # Not the machine in front of you. Record it so this value is
+                # not treated as news later, but do not touch the pasteboard.
+                with lock:
+                    last["remote"] = data
                 continue
             with lock:
                 if data == last["remote"]:
@@ -237,6 +329,36 @@ def pump(ag):
                 seen["count"] = count
                 data = subprocess.run([PBIO, "read", kind], stdout=subprocess.PIPE,
                                       timeout=10).stdout
+
+                # Files are the one kind where what is on the pasteboard is not
+                # what has to cross. The pasteboard holds paths on THIS machine,
+                # which mean nothing on the far side, so the bytes go over the
+                # master and what the session's clipboard ends up holding is the
+                # paths they landed at.
+                if kind == "files":
+                    paths = [p for p in data.decode("utf-8", "replace").split("\n") if p]
+                    if not paths:
+                        time.sleep(MAC_POLL); continue
+                    with lock:
+                        new_sel = data != last["mac"]
+                        if new_sel:
+                            last["mac"] = data
+                            last["remote"] = data
+                    if new_sel:
+                        remote, why = send_files(paths)
+                        if remote is None:
+                            log("not copying %d file(s): %s" % (len(paths), why))
+                        else:
+                            log("copied %d file(s) to the session" % len(remote))
+                            try:
+                                ag.stdin.write(b"SETFILES " + base64.b64encode(
+                                    "\n".join(remote).encode()) + b"\n")
+                                ag.stdin.flush()
+                            except Exception:
+                                log("lost the agent channel")
+                                return
+                    time.sleep(MAC_POLL)
+                    continue
             else:
                 data = subprocess.run(["pbpaste"], stdout=subprocess.PIPE,
                                       timeout=5, env=PB_ENV).stdout

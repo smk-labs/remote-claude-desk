@@ -10,9 +10,10 @@
 // because both ends mangled it the same way (docs/lessons.md, trap 2).
 // NSPasteboard has no encoding to get wrong: bytes in, bytes out.
 //
-//   pbio kind          -> "<changeCount> image|text|none"
+//   pbio kind          -> "<changeCount> files|image|text|none"
 //   pbio read text     -> the text, as utf8, on stdout
 //   pbio read image    -> the image, as png, on stdout
+//   pbio read files    -> one absolute path per line, on stdout
 //   pbio write text    -> stdin becomes the pasteboard text
 //   pbio write image   -> stdin (png) becomes the pasteboard image
 import AppKit
@@ -47,18 +48,41 @@ func imageData() -> Data? {
 // over text, because a copy out of a web page carries both.
 func pasteboardKind() -> String {
     let types = pb.types ?? []
+    // Files first, and the order is the whole decision. Copying a picture in
+    // Finder puts BOTH a file url and a preview image on the pasteboard, and
+    // answering "image" there would send the pixels and silently lose the file
+    // the person actually copied. Nothing that is only a picture, a screenshot
+    // or a copy out of a browser, carries a file url, so nothing is misread the
+    // other way.
+    if types.contains(.fileURL) { return "files" }
     if types.contains(.png) || types.contains(.tiff) { return "image" }
     if types.contains(.string) { return "text" }
     return "none"
+}
+
+// The paths behind the file urls, one per line.
+//
+// readObjects is the only API that returns every item: a multiple selection is
+// several urls on one pasteboard, and pb.data(forType: .fileURL) would answer
+// with the first and hide the rest.
+func filePaths() -> String? {
+    let opts: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+    guard let urls = pb.readObjects(forClasses: [NSURL.self], options: opts) as? [URL],
+          !urls.isEmpty else { return nil }
+    return urls.map { $0.path }.joined(separator: "\n") + "\n"
 }
 
 switch args.first {
 case "kind":
     print("\(pb.changeCount) \(pasteboardKind())")
 case "read":
-    let data: Data? = args.count > 1 && args[1] == "image"
-        ? imageData()
-        : pb.string(forType: .string)?.data(using: .utf8)
+    let what = args.count > 1 ? args[1] : "text"
+    let data: Data?
+    switch what {
+    case "image": data = imageData()
+    case "files": data = filePaths()?.data(using: .utf8)
+    default:      data = pb.string(forType: .string)?.data(using: .utf8)
+    }
     guard let d = data else { exit(1) }
     FileHandle.standardOutput.write(d)
 case "write":
@@ -68,6 +92,6 @@ case "write":
     if args.count > 1 && args[1] == "image" { pb.setData(d, forType: .png) }
     else { pb.setString(String(decoding: d, as: UTF8.self), forType: .string) }
 default:
-    FileHandle.standardError.write(Data("usage: pbio kind | read text|image | write text|image\n".utf8))
+    FileHandle.standardError.write(Data("usage: pbio kind | read text|image|files | write text|image\n".utf8))
     exit(2)
 }
