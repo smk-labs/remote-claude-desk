@@ -15,6 +15,12 @@ desk_say()  { printf '%s\n' "$*"; }
 desk_warn() { printf '%s\n' "$*" >&2; }
 desk_die()  { printf '%s\n' "$*" >&2; exit 1; }
 
+# The same, with the time in front. Only the watcher uses it, because only the
+# watcher writes into a log that is read days later, and "the tunnel dropped"
+# with no timestamp answers nothing. The agent log had none of these until a
+# night was spent trying to work out when a drop had happened.
+desk_log()  { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+
 # ─── where am I ──────────────────────────────────────────────────────────────
 
 # Follow a symlink chain to the real file.
@@ -237,17 +243,75 @@ desk_ensure_master() {
     || desk_master_failed "SSH master did not come up within 10s."
 }
 
-# Forward the RDP port and prove something answers on it. A forward that fails
-# is silent by default, and the next thing you see is the RDP client failing to
-# connect for a reason that looks like the server's fault.
-desk_forward() {
-  _try_forward() {
-    ssh -S "$DESK_SSH_SOCKET" -O forward \
-        -L "${DESK_LOCAL_PORT}:${DESK_RDP_ADDR}:${DESK_RDP_PORT}" "$DESK_HOST" 2>/dev/null
-    nc -z -G 3 127.0.0.1 "$DESK_LOCAL_PORT" 2>/dev/null
-  }
+# Forward the RDP port and prove the right machine answers on it.
+#
+# The old proof was `nc -z` on the local port, and it is not one. Two failures
+# pass it. A forward request that fails is silent, so the port can still be
+# answering from something else entirely: the other machine's master holding the
+# same number, or a listener left by a run that died. And a master that survived
+# a network drop keeps its listener while every channel through it is dead, so
+# the port accepts a connection and then says nothing.
+#
+# Both were real. The second cost two mornings. The first is worse, because the
+# client connects to the WRONG BOX and everything reports healthy.
+#
+# Two questions settle it exactly: whose listener is this, and does an RDP
+# server answer through it.
+desk_master_pid() {
+  ssh -S "$DESK_SSH_SOCKET" -O check "$DESK_HOST" 2>&1 \
+    | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p'
+}
 
-  _try_forward && return 0
+desk_port_owner_pid() {
+  lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1
+}
+
+# Speak the first nineteen bytes of RDP and read the reply.
+#
+# An X.224 connection request gets a connection confirm, and every TPKT reply
+# starts with 0x03. That is a whole round trip through the forward, into xrdp,
+# and back, which is the only thing that actually proves the tunnel carries what
+# the client is about to send. It costs about half a second.
+#
+# Bounded twice: nc gives up after 3 seconds, and head stops at the first byte.
+desk_rdp_probe() {
+  local first
+  first="$(printf '\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00' \
+    | nc -w 3 127.0.0.1 "$1" 2>/dev/null | head -c 1 | od -An -tx1 | tr -d ' \n')"
+  [ "$first" = "03" ]
+}
+
+# Is the tunnel usable right now? Cheap enough to ask every few seconds, which
+# is what desk-tunnel --watch does with it.
+desk_forward_healthy() {
+  local mpid opid
+  mpid="$(desk_master_pid)"
+  [ -n "$mpid" ] || return 1
+  opid="$(desk_port_owner_pid "$DESK_LOCAL_PORT")"
+  [ "$opid" = "$mpid" ] || return 1
+  desk_rdp_probe "$DESK_LOCAL_PORT"
+}
+
+desk_forward() {
+  desk_forward_healthy && return 0
+
+  # Another process on the number is not something to retry around. Retrying
+  # would bind nothing, report success, and send the RDP client to whatever is
+  # already there, which on this Mac means the other machine.
+  local opid mpid
+  opid="$(desk_port_owner_pid "$DESK_LOCAL_PORT")"
+  mpid="$(desk_master_pid)"
+  if [ -n "$opid" ] && [ -n "$mpid" ] && [ "$opid" != "$mpid" ]; then
+    desk_warn "127.0.0.1:$DESK_LOCAL_PORT is held by pid $opid, which is not this"
+    desk_warn "machine's SSH master (pid $mpid). Another tunnel or a leftover owns it."
+    desk_warn "  Look:  lsof -nP -iTCP:$DESK_LOCAL_PORT -sTCP:LISTEN"
+    desk_warn "  Then:  give this machine its own DESK_LOCAL_PORT, or kill that one."
+    exit 1
+  fi
+
+  ssh -S "$DESK_SSH_SOCKET" -O forward \
+      -L "${DESK_LOCAL_PORT}:${DESK_RDP_ADDR}:${DESK_RDP_PORT}" "$DESK_HOST" 2>/dev/null || true
+  desk_forward_healthy && return 0
 
   # A master that survives a network drop keeps answering `-O check` while every
   # channel through it is already dead, so the forward is accepted and then goes
@@ -257,7 +321,9 @@ desk_forward() {
   desk_say "tunnel did not answer, rebuilding the SSH connection..."
   ssh -S "$DESK_SSH_SOCKET" -O exit "$DESK_HOST" >/dev/null 2>&1 || true
   desk_ensure_master
-  _try_forward && return 0
+  ssh -S "$DESK_SSH_SOCKET" -O forward \
+      -L "${DESK_LOCAL_PORT}:${DESK_RDP_ADDR}:${DESK_RDP_PORT}" "$DESK_HOST" 2>/dev/null || true
+  desk_forward_healthy && return 0
 
   desk_warn "Tunnel is not answering on 127.0.0.1:${DESK_LOCAL_PORT}, even after a rebuild."
   desk_reach_report

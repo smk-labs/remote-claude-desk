@@ -58,8 +58,8 @@ up with only the first one. So the layout is pushed back on every connect.
 - xrdp sets the keymap from what the client announces, and it does that after
   `xfce4-settings` has had its say, so a server-side setting alone loses
 - `setxkbmap -layout "$LAYOUTS" -option "$TOGGLE"`, in `remote/apply-layout.sh`
-- `desk-tunnel` runs that script over the SSH master, on every connect and every
-  five minutes if you installed the LaunchAgent
+- `desk-tunnel` runs that script over the SSH master, on every connect and on
+  every rebuild the watcher triggers, if you installed the LaunchAgent
 - bounded: 12 tries, 2 seconds apart, and it wants three consecutive successes
   before believing the answer, because the first one can land while xrdp is
   still writing over it

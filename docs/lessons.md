@@ -429,8 +429,9 @@ was unreachable on every port, from two different machines, and stayed
 unreachable across a reboot. Recovery needed the provider's console.
 
 **The mechanism.** Automation kept running while the account changed underneath
-it: a LaunchAgent re-runs `desk-tunnel` every five minutes, and it went on
-authenticating as `moe`, which no longer existed. fail2ban read a burst of
+it: a LaunchAgent re-ran `desk-tunnel` every five minutes (it watches
+continuously now, trap 20), and it went on authenticating as `moe`, which no
+longer existed. fail2ban read a burst of
 failures for a nonexistent user as exactly what it is built to stop, and banned
 the address. The log is unambiguous:
 
@@ -569,6 +570,43 @@ process. The bridge died during an unrelated outage the same day and the only
 symptom was copy and paste quietly not working. So all three are checks now,
 proved by flipping the Mac setting and watching the doctor go red. A fix that
 depends on invisible state is not finished until something asserts that state.
+
+## Trap 20: "offline" was true, and it was about the tunnel, not the box
+
+Windows App said the PC was offline. The box had 83 days of uptime, xrdp was
+running, the session was alive, and `desk-doctor` passed every check. All of
+that was true and none of it was the question.
+
+**The mechanism.** Nothing was listening on `127.0.0.1:33890`. The agent was
+`RunAtLoad` plus `StartInterval` 300, so a master dropped by a sleep or a wifi
+handoff left no forward for up to five minutes, and the client is honest about
+what it finds: nothing there, PC offline.
+
+Two things hid it. `desk_forward` proved the forward with `nc -z` on the local
+port, which proves only that *something* answers, not that our master owns it or
+that RDP crosses it. And the doctor had no question about the tunnel at all: it
+checked the Mac, the SSH config, the master and the whole server, and never
+asked whether the port a client would dial actually carried RDP.
+
+**The fix.** Proof, then watching.
+
+- `desk_forward_healthy`: the listener's pid must equal this machine's SSH
+  master pid, and an X.224 connection request on the port must come back as a
+  connection confirm. About half a second, and it is the same question the
+  client is about to ask.
+- `desk-tunnel --watch` asks it every fifteen seconds and exits when the answer
+  changes. `KeepAlive` restarts it. Measured: master killed, tunnel proven back
+  up 11 seconds later, including a fresh TOTP login.
+- a failure to *establish* backs off, doubling to a ten-minute ceiling, because
+  a `KeepAlive` job against a box that is switched off would otherwise spend a
+  TOTP code every fifteen seconds, and trap 16 is what that leads to. A tunnel
+  that came up and then dropped is exempt: it rebuilds at once.
+
+**The general shape.** A check that cannot fail is not a check. `nc -z` passed
+in both failure modes this repo actually has: the other machine's master holding
+the same port number, and a master that survived a network drop with every
+channel dead. Ask the question the caller will ask, or do not claim to have
+asked it.
 
 ## What is not verified
 

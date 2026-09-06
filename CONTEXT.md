@@ -42,10 +42,10 @@ having similar names and completely different lifetimes.
   stdin, while `clip-png.sh` and `scroll-probe.py` are put on the box by hand.
 - **The LaunchAgent** is `com.smk-labs.desk-tunnel.<host>`, written by
   `desk-tunnel --install`, one per Mac because two boxes are normal here. It
-  holds nothing open. It re-runs `desk-tunnel` at login and every five minutes,
-  which is what heals a master dropped by a wifi handoff and what pushes the
-  layout into a session that did not exist at login. Its log is
-  `~/.cache/remote-claude-desk/tunnel-agent.log`.
+  holds nothing open. It runs `desk-tunnel --watch` at login and again whenever
+  that exits (`KeepAlive`), so the tunnel is rebuilt seconds after a wifi
+  handoff rather than at the next tick of a clock. Its log is
+  `~/.cache/remote-claude-desk/tunnel-agent.log`, timestamped.
 - **An orphan** is a session whose `xrdp-sesman` was restarted underneath it.
   The desktop keeps running but nothing tracks it any more, and every later
   connect makes a new session that dies at once.
@@ -59,7 +59,7 @@ thing whose lifetime you guessed wrong.
 |---|---|
 | The client | you close the window |
 | The forward | the master goes away |
-| The bridge | it gives up after 10 failed reconnects, or you kill it. `desk-tunnel` starts a fresh one within five minutes |
+| The bridge | it gives up after 10 failed reconnects, the wait doubling to a minute between them, or you kill it. `desk-tunnel --watch` notices and a fresh run starts another |
 | The master | it is idle past `ControlPersist`, or you kill it |
 | The LaunchAgent | you run `desk-tunnel --uninstall` |
 | The session | the server reboots |

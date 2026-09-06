@@ -117,9 +117,17 @@ HOME="$HOME_BEFORE"
 rm -rf "$tmp"
 
 # --- macOS already knows why the client froze --------------------------------
+#
+# The path is Windows App's, and ONLY Windows App's. This read both clients
+# while both existed. The day FreeRDP was deleted that turned into a bug: the
+# newest .hang on the disk was a FreeRDP one from the day before, so every run
+# warned about a freeze in a client that is not installed, and a real Windows
+# App hang filed later would have sorted below it and never been seen.
 doctor_src="$(cat "$ROOT/bin/desk-doctor")"
-contains "$doctor_src" 'DiagnosticReports/sdl-freerdp*.hang' \
+contains "$doctor_src" 'DiagnosticReports/Windows App' \
          "desk-doctor reads the hang reports macOS files about the client"
+doctor_code="$(grep -v '^[[:space:]]*#' "$ROOT/bin/desk-doctor")"
+lacks "$doctor_code" 'sdl-freerdp' "desk-doctor does not report hangs of a client that is gone"
 
 # The lock is released on the way out, never by cleanup.
 #
@@ -240,3 +248,74 @@ contains "$doctor_src" '[d]esk-clip --for' \
          "desk-doctor checks the clipboard bridge is running"
 contains "$(cat "$ROOT/remote/check.sh")" 'cliprdr=false' \
          "check.sh checks the RDP clipboard channel is off on the server"
+
+# --- the tunnel is proven, not assumed ---------------------------------------
+#
+# `nc -z` on the local port was the old proof of a working forward, and it is
+# not one. Two real failures pass it. A forward request that fails is silent, so
+# the port can be answering from something else entirely: on this Mac that means
+# the OTHER machine's master, holding the same number, and the client then logs
+# into the wrong box with every check green. And a master that survived a
+# network drop keeps its listener while every channel through it is dead, so the
+# port accepts a connection and carries nothing. That one cost two mornings.
+common_code="$(grep -v '^[[:space:]]*#' "$ROOT/lib/common.sh")"
+# Scoped to the two functions that decide it. `nc -z` is still right elsewhere:
+# desk_reach_report uses it to ask whether the far host answers at all, which is
+# a question about reachability and not a claim about the forward.
+forward_code="$(awk '/^desk_forward_healthy\(\)/,/^}/' "$ROOT/lib/common.sh"
+                awk '/^desk_forward\(\)/,/^}/' "$ROOT/lib/common.sh")"
+lacks "$forward_code" 'nc -z' "desk_forward does not treat an open port as proof"
+contains "$common_code" 'desk_forward_healthy' "desk_forward asks a question it can be wrong about"
+contains "$common_code" '"$opid" = "$mpid"' "the listener must belong to THIS machine's master"
+contains "$common_code" 'x03\x00\x00\x13' "the check is a real X.224 handshake, not a connect"
+
+# The probe has to end by itself. A check that can hang is worse than no check:
+# the watcher blocks on it and stops watching, which is the failure it exists to
+# catch, arriving through the door marked prevention.
+contains "$common_code" 'nc -w 3' "the handshake probe has its own ceiling"
+
+# --- the agent watches, it does not tick --------------------------------------
+#
+# It was RunAtLoad plus a five-minute StartInterval, and that is what made the
+# setup feel unreliable. A wifi handoff, a sleep or a VPN switch takes the
+# forward with it, and the port is then gone for up to five minutes while the
+# box itself is perfectly healthy. Windows App says the PC is offline, which is
+# true and useless. Worse, no interval can catch a tunnel that is listening and
+# dead, because from the outside that looks exactly like a working one.
+contains "$tunnel_src" '<key>KeepAlive</key><true/>' "the agent is restarted whenever it exits"
+contains "$tunnel_src" '<string>--watch</string>' "the agent runs the watcher, not a one-shot"
+# The comments still name it, because the comment explaining a mistake is
+# allowed to name it. The code is what must not.
+lacks "$tunnel_code" 'StartInterval' "the five-minute interval is gone"
+contains "$tunnel_src" 'desk_forward_healthy' "the watcher checks the same thing the client will ask"
+
+# Both ceilings. The watcher is meant to be long-lived, not immortal: a process
+# alive since the last reboot is one nobody has proved still works.
+contains "$tunnel_src" 'DESK_WATCH_MAX_LIFE:-21600' "the watcher hands back to launchd after six hours"
+
+# The backoff exists because launchd restarts a KeepAlive job as fast as
+# ThrottleInterval allows, and every restart against ousmousa spends a TOTP code
+# at the login prompt. A box switched off for an hour would burn 120 of them.
+contains "$tunnel_src" '"$wait" -gt 600' "a host that is simply off is retried at most every ten minutes"
+contains "$tunnel_src" 'trap - EXIT' "a tunnel that came up and dropped is rebuilt at once, not after a penalty"
+
+# --- the clipboard rides out an outage ---------------------------------------
+#
+# Ten tries three seconds apart is thirty seconds of patience, and a wifi
+# handoff outlives that. The bridge gave up during an outage the rest of the
+# system survived, and the clipboard was then silently gone until someone ran
+# desk-tunnel by hand. Found exactly that way: desk-doctor said no bridge, on a
+# machine where everything else passed.
+clip_src="$(cat "$ROOT/bin/desk-clip")"
+contains "$clip_src" 'RETRY_WAIT_MAX' "the reconnect wait grows instead of staying at three seconds"
+contains "$clip_src" 'min(RETRY_WAIT * (2 ** n), RETRY_WAIT_MAX)' "it doubles, with a ceiling"
+
+# --- the doctor asks about the tunnel itself ---------------------------------
+#
+# Every check passed on the evening this section was written, the server was up,
+# the session was alive, and the client said the PC was offline. It was right.
+# Nothing was listening on the port, and "is the tunnel up" was a question the
+# doctor did not ask.
+contains "$doctor_src" 'head_ "Tunnel"' "desk-doctor has a section for the tunnel"
+contains "$doctor_src" 'is the old five-minute interval agent' "it catches an agent left in the old shape"
+contains "$doctor_src" 'desk_rdp_probe' "it proves the port carries RDP, not merely that it is open"

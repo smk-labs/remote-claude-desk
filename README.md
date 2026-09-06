@@ -129,16 +129,25 @@ desk-tunnel --install
 ```
 
 Run that once per Mac and you never type anything again. It writes a LaunchAgent
-named after this machine that runs `desk-tunnel` at login and every five
-minutes: that is what rebuilds a master dropped by a wifi handoff, what pushes
-the layout into a session that did not exist when you logged in, and what
-replaces a clipboard bridge that died. Every step inside is idempotent, so a
-re-run on a healthy setup is a few cheap checks.
+named after this machine that runs `desk-tunnel --watch` at login and restarts
+it whenever it exits.
+
+Watching, not ticking. Every fifteen seconds it asks the one question the RDP
+client is about to ask: does our own forward carry a real RDP handshake. When
+the answer stops being yes, it exits, launchd starts a fresh run, and the master,
+the forward, the keyboard layout and the clipboard bridge are all rebuilt in
+order. A wifi handoff is repaired in about ten seconds, measured.
+
+It used to be a five-minute interval instead, which is where "it says the PC is
+offline" came from: the box was fine, the tunnel was gone, and nothing was
+looking. An interval also cannot catch a tunnel that is listening and dead,
+because from the outside that looks exactly like a working one.
 
 | Command | What it does |
 |---|---|
 | `desk-tunnel` | open the tunnel, heal an orphan, push the layout, start the clipboard bridge, once |
-| `desk-tunnel --install` | do that at login and every 5 minutes, for this machine |
+| `desk-tunnel --watch` | do that, then hold the tunnel up until it cannot be |
+| `desk-tunnel --install` | run `--watch` at login, restarted whenever it exits |
 | `desk-tunnel --uninstall` | stop doing that |
 | `desk-doctor` | check every precondition on both machines |
 | `desk-doctor --local` | skip the checks that need the server |

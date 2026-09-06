@@ -71,8 +71,9 @@ DISPLAY = os.environ.get("DESK_DISPLAY", "")
 
 MAC_POLL = 0.10          # local and free, so poll it fast
 START_TIMEOUT = 20.0     # ceiling on bringing the agent up
-RETRY_WAIT = 3.0         # between reconnect attempts
-MAX_CONSECUTIVE_FAILURES = 10   # about 30s of failing before we give up loudly
+RETRY_WAIT = 3.0         # first reconnect attempt, doubled after each failure
+RETRY_WAIT_MAX = 60.0    # ceiling on that doubling
+MAX_CONSECUTIVE_FAILURES = 10   # about nine minutes of failing before giving up
 
 # The agent script lives under the remote user's own cache directory, never in
 # /tmp. On a shared box /tmp is writable by every tenant, so a fixed name there
@@ -310,13 +311,22 @@ def main():
     # leave `desk` running with a clipboard that had silently stopped working.
     # Bounded: consecutive failures are counted, so a genuinely broken setup
     # says so instead of retrying forever.
+    # The wait grows, and that is the difference between surviving an outage and
+    # dying in one. Ten tries three seconds apart is thirty seconds: a wifi
+    # handoff outlives it, and the bridge would give up while the laptop was
+    # still finding a network. Doubling to a minute spends the same ten tries
+    # over nine minutes instead, so a real outage is ridden out and a genuinely
+    # broken setup still says so rather than retrying forever.
+    def backoff(n):
+        return min(RETRY_WAIT * (2 ** n), RETRY_WAIT_MAX)
+
     failures = 0
     first = True
     while failures < MAX_CONSECUTIVE_FAILURES:
         ag = start_agent()
         if ag is None:
             failures += 1
-            time.sleep(RETRY_WAIT)
+            time.sleep(backoff(failures - 1))
             continue
         current["agent"] = ag
         if first:
@@ -338,10 +348,15 @@ def main():
         else:
             failures = 0
 
-        log("reconnecting in %.0fs..." % RETRY_WAIT)
-        time.sleep(RETRY_WAIT)
+        wait = backoff(failures)
+        log("reconnecting in %.0fs..." % wait)
+        time.sleep(wait)
 
-    log("gave up after %d consecutive failures; text will not cross."
+    # Exiting is not the end of the clipboard: desk-tunnel --watch notices the
+    # bridge is gone and a fresh run starts a new one. Saying so matters,
+    # because the old line read like a dead end and sent people to restart
+    # things by hand.
+    log("gave up after %d consecutive failures; desk-tunnel --watch will start a new one."
         % MAX_CONSECUTIVE_FAILURES)
     return 1
 

@@ -58,11 +58,12 @@ head_ "This Mac"
 # and one line naming the function it stopped in. Two of these sat on the disk
 # for two days while the freeze was blamed on the clipboard, the scroll and the
 # server in turn.
-# Both clients, because the lesson is about the reports and not about FreeRDP:
-# whichever one is drawing the screen, macOS files the same thing under its own
-# name when it stops answering.
-newest_hang="$(ls -t /Library/Logs/DiagnosticReports/sdl-freerdp*.hang \
-                     "/Library/Logs/DiagnosticReports/Windows App"*.hang 2>/dev/null | head -1)"
+# Windows App only. This read both clients while both existed, and the day
+# FreeRDP was deleted that became a bug: the newest report on this disk was a
+# FreeRDP hang from the day before, so the doctor warned on every run about a
+# freeze in a client that is no longer installed, and a real Windows App hang
+# filed after it would have been hidden behind that one.
+newest_hang="$(ls -t "/Library/Logs/DiagnosticReports/Windows App"*.hang 2>/dev/null | head -1)"
 if [ -n "$newest_hang" ]; then
   hang_age=$(( ( $(date +%s) - $(stat -f %m "$newest_hang" 2>/dev/null || echo 0) ) / 86400 ))
   # The deepest frame that still names a subsystem. The rows under it are the
@@ -205,14 +206,77 @@ else
     ok "SSH master is up"
   else
     warn "SSH master is down (desk-tunnel brings it up on its own)"
-    # If a keepalive helper left a reason, show it. A background helper that
-    # fails silently is how a dead connection stays unnoticed until the moment
-    # it is needed.
-    if [ -f "$HOME/.ssh/ousmousa-status" ]; then
-      fix "last keepalive result: $(cat "$HOME/.ssh/ousmousa-status")"
-    fi
     [ -n "$DESK_CONNECT_CMD" ] && fix "it will run DESK_CONNECT_CMD" \
                                || fix "it will run a plain ssh -fNM"
+  fi
+fi
+
+# ─── the tunnel ──────────────────────────────────────────────────────────────
+#
+# This section exists because of one evening. Every check above passed, the
+# server was up, the session was alive, and Windows App said the PC was offline.
+# It was right: nothing was listening on the port. The agent was a five-minute
+# interval, the master had dropped, and the answer to "is the tunnel up" was a
+# question nobody was asking.
+head_ "Tunnel"
+
+agent_label="com.smk-labs.desk-tunnel.$DESK_HOST"
+agent_plist="$HOME/Library/LaunchAgents/$agent_label.plist"
+if [ ! -f "$agent_plist" ]; then
+  bad "no LaunchAgent for '$DESK_HOST', so nothing holds its tunnel up"
+  fix "desk-tunnel --install"
+else
+  if grep -q "StartInterval" "$agent_plist"; then
+    # The old shape. It works, in the sense that it comes back within five
+    # minutes, which is exactly as long as it takes to decide the thing is
+    # broken and go and do something else.
+    bad "$agent_label is the old five-minute interval agent, not a watcher"
+    fix "desk-tunnel --install   (it rewrites the plist to KeepAlive + --watch)"
+  elif ! grep -q -- "--watch" "$agent_plist"; then
+    bad "$agent_label does not run --watch, so it exits and leaves nothing watching"
+    fix "desk-tunnel --install"
+  else
+    ok "$agent_label is a watcher (KeepAlive, --watch)"
+  fi
+  agent_pid="$(launchctl print "gui/$(id -u)/$agent_label" 2>/dev/null | awk '/^\tpid = /{print $3; exit}')"
+  if [ -n "$agent_pid" ]; then
+    ok "it is running now (pid $agent_pid)"
+  else
+    warn "it is installed but not running at this moment"
+    fix "launchctl kickstart -k gui/$(id -u)/$agent_label"
+    fix "log: $HOME/.cache/remote-claude-desk/tunnel-agent.log"
+  fi
+fi
+
+if [ "$LOCAL_ONLY" = "1" ]; then
+  echo "  skipped the live checks (--local)"
+else
+  # Who owns the port, asked exactly. Two machines on one Mac means two ports,
+  # and the failure that produces is not a failure at all from the outside: the
+  # client connects, logs in, and you are on the other box wondering why your
+  # windows moved.
+  owner_pid="$(desk_port_owner_pid "$DESK_LOCAL_PORT")"
+  master_pid="$(desk_master_pid)"
+  if [ -z "$owner_pid" ]; then
+    bad "nothing is listening on 127.0.0.1:$DESK_LOCAL_PORT, so the client will say the PC is offline"
+    fix "desk-tunnel"
+  elif [ -n "$master_pid" ] && [ "$owner_pid" != "$master_pid" ]; then
+    bad "127.0.0.1:$DESK_LOCAL_PORT is held by pid $owner_pid, not this machine's master (pid $master_pid)"
+    fix "that is the other machine's tunnel or a leftover: lsof -nP -iTCP:$DESK_LOCAL_PORT -sTCP:LISTEN"
+  else
+    ok "127.0.0.1:$DESK_LOCAL_PORT is this machine's own forward (pid $owner_pid)"
+  fi
+
+  # The handshake. Everything else can pass while this fails, which is the whole
+  # reason it is here: a master that survived a network drop keeps its listener
+  # and carries nothing.
+  if [ -n "$owner_pid" ]; then
+    if desk_rdp_probe "$DESK_LOCAL_PORT"; then
+      ok "an RDP server answers a real handshake through it"
+    else
+      bad "the port accepts a connection but no RDP server answers through it"
+      fix "the master is up but its channels are dead. desk-tunnel rebuilds it."
+    fi
   fi
 fi
 

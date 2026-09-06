@@ -47,8 +47,11 @@ cannot.
   RDP port to `localhost`, pushes your keyboard layout into the live X session,
   and starts the clipboard bridge. Then it exits: it holds nothing open, the
   master does.
+- `desk-tunnel --watch` does the same and then stays, checking every fifteen
+  seconds that the forward still carries RDP, and exiting the moment it does not.
 - `desk-tunnel --install` writes a LaunchAgent, named after this machine, that
-  runs the same thing at login and every five minutes. `--uninstall` removes it.
+  runs `--watch` at login and restarts it whenever it exits. `--uninstall`
+  removes it.
 - `desk-doctor` checks both ends and tells you which one is broken.
 - Both read `config.sh`, from `~/.config/remote-claude-desk/config.sh` first,
   then the repo. `DESK_CONFIG` names a different file, which is how one Mac

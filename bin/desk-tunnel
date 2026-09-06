@@ -14,11 +14,16 @@
 # the SSH master does. But that means something has to run it, and "run it
 # yourself, every time, before you can work" is not a design, it is a chore.
 #
-# So a LaunchAgent per machine. RunAtLoad brings the tunnel up at login, and
-# StartInterval re-runs it every five minutes, which is what heals a master
-# dropped by a wifi handoff and what pushes the keyboard layout into a session
-# that did not exist at login. Every step in here is already idempotent and
-# already bounded, so a re-run on a healthy setup is three cheap checks.
+# So a LaunchAgent per machine, running `--watch`: do the work, then stay and
+# check every fifteen seconds that the tunnel still carries RDP, and exit the
+# moment it does not so launchd starts a fresh one.
+#
+# It used to be a five-minute StartInterval instead, and that is what made the
+# thing feel unreliable. A wifi handoff, a sleep, a VPN switch, and the port is
+# gone for up to five minutes. The client says the PC is offline, which is true
+# and useless: the box is fine, the tunnel is not. Watching closes that window
+# to seconds, and it is also the only way to notice a tunnel that is listening
+# and dead, which no interval can catch by definition.
 #
 # One agent per machine, labelled by host, because two boxes are normal here and
 # a single agent could only ever serve one of them.
@@ -39,6 +44,35 @@ AGENT_DIR="$HOME/Library/LaunchAgents"
 AGENT_LABEL="com.smk-labs.desk-tunnel.$DESK_HOST"
 AGENT_PLIST="$AGENT_DIR/$AGENT_LABEL.plist"
 
+# --watch does the same work first, then keeps watching. Anything below that
+# fails is a failure of the tunnel itself, so it is worth exiting on either way.
+WATCH=0
+[ "${1:-}" = "--watch" ] && { WATCH=1; shift; }
+
+FAIL_FILE="$HOME/.cache/remote-claude-desk/$DESK_HOST.fails"
+mkdir -p "$HOME/.cache/remote-claude-desk" 2>/dev/null || true
+
+# Slow down when the far side is simply not there.
+#
+# launchd restarts a KeepAlive job as fast as ThrottleInterval allows, and every
+# restart on ousmousa spends a TOTP code at the login prompt. A box that is off
+# for an hour would burn 120 of them. So a failed watch run sleeps before it
+# exits, longer each consecutive time, and launchd's clock only starts after
+# that. Ten minutes is the ceiling: long enough to be quiet, short enough that a
+# box coming back is picked up while you are still making coffee.
+_backoff_then_exit() {
+  local rc=$? n wait
+  { [ "$WATCH" = 1 ] && [ "$rc" -ne 0 ]; } || exit "$rc"
+  n=$(( $(cat "$FAIL_FILE" 2>/dev/null || echo 0) + 1 ))
+  printf '%s' "$n" > "$FAIL_FILE"
+  wait=$(( 30 * (1 << (n > 5 ? 5 : n - 1)) ))
+  [ "$wait" -gt 600 ] && wait=600
+  desk_log "watch: run failed (rc=$rc, consecutive=$n). Holding ${wait}s before launchd retries."
+  sleep "$wait"
+  exit "$rc"
+}
+trap _backoff_then_exit EXIT
+
 case "${1:-}" in
   --install)
     mkdir -p "$AGENT_DIR" "$HOME/.cache/remote-claude-desk"
@@ -55,6 +89,7 @@ case "${1:-}" in
   <key>ProgramArguments</key>
   <array>
     <string>$ROOT/bin/desk-tunnel</string>
+    <string>--watch</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -62,7 +97,8 @@ case "${1:-}" in
     <key>PATH</key><string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>StartInterval</key><integer>300</integer>
+  <key>KeepAlive</key><true/>
+  <key>ThrottleInterval</key><integer>15</integer>
   <key>StandardOutPath</key><string>$HOME/.cache/remote-claude-desk/tunnel-agent.log</string>
   <key>StandardErrorPath</key><string>$HOME/.cache/remote-claude-desk/tunnel-agent.log</string>
 </dict>
@@ -71,7 +107,7 @@ PLIST
     launchctl bootout "gui/$(id -u)/$AGENT_LABEL" 2>/dev/null || true
     if launchctl bootstrap "gui/$(id -u)" "$AGENT_PLIST" 2>/dev/null; then
       desk_say "installed $AGENT_LABEL"
-      desk_say "  it runs now, at every login, and every 5 minutes after that."
+      desk_say "  it runs now, at every login, and is restarted whenever it exits."
       desk_say "  log: $HOME/.cache/remote-claude-desk/tunnel-agent.log"
       desk_say "  remove it with: desk-tunnel --uninstall"
       exit 0
@@ -87,7 +123,8 @@ PLIST
   --help|-h)
     cat <<USAGE
 desk-tunnel              forward the port and push the keyboard layout, once
-desk-tunnel --install    do that at login and every 5 minutes, for this machine
+desk-tunnel --watch      do that, then hold the tunnel up until it cannot be
+desk-tunnel --install    run --watch at login and keep it running, for this machine
 desk-tunnel --uninstall  stop doing that
 
 Which machine is decided by DESK_CONFIG, the same way desk-doctor decides.
@@ -190,3 +227,65 @@ In your RDP client, add a PC:
 
 The tunnel stays up as long as the SSH master lives.
 INFO
+
+# The tunnel is up.
+#
+# Reset the backoff, and disarm it. It exists to slow down repeated failures to
+# ESTABLISH, when the box is off and every attempt spends a TOTP code. A tunnel
+# that came up and later dropped is the opposite case: a wifi handoff deserves
+# an immediate rebuild, not thirty seconds of penance for something that was
+# working a moment ago.
+printf '0' > "$FAIL_FILE" 2>/dev/null || true
+trap - EXIT
+[ "$WATCH" = 1 ] || exit 0
+
+# ─── watching ───────────────────────────────────────────────────────────────
+#
+# Everything above happens once and is idempotent. This is the part that makes
+# the tunnel feel like it is simply always there.
+#
+# The check is desk_forward_healthy: our master owns the local port, and an RDP
+# server answers a real handshake through it. It costs about half a second and
+# it is the same question the client is about to ask, which is why it catches
+# the case an interval never can: a listener that accepts and then says nothing.
+#
+# On failure it exits rather than repairing in place. launchd is already a
+# supervisor and a better one than a loop here would be: a fresh run redoes the
+# master, the forward, the keyboard and the bridge in the right order, with the
+# same code path a manual run uses. Two ways to repair one thing is how the
+# repair drifts from the setup.
+WATCH_INTERVAL="${DESK_WATCH_INTERVAL:-15}"
+# A ceiling on the watcher itself. Nothing here is meant to run for weeks, and a
+# process that has been alive since a laptop was last rebooted is a process
+# nobody has proved still works. Six hours, then hand back to launchd.
+WATCH_MAX_LIFE="${DESK_WATCH_MAX_LIFE:-21600}"
+BRIDGE_EVERY=20
+
+desk_log "watch: up on 127.0.0.1:$DESK_LOCAL_PORT, checking every ${WATCH_INTERVAL}s"
+started="$(date +%s)"
+tick=0
+
+while :; do
+  sleep "$WATCH_INTERVAL"
+  tick=$((tick + 1))
+
+  if ! desk_forward_healthy; then
+    desk_log "watch: 127.0.0.1:$DESK_LOCAL_PORT stopped answering RDP. Exiting so launchd rebuilds it."
+    exit 1
+  fi
+
+  # The bridge dies on its own terms: desk-clip stops after enough consecutive
+  # failures, which a long outage produces, and then the clipboard is quietly
+  # gone while everything else looks perfect. Cheap to notice, so notice it.
+  if [ $((tick % BRIDGE_EVERY)) -eq 0 ] && [ -n "${display:-}" ]; then
+    if ! pgrep -f "[d]esk-clip --for .*:${DESK_LOCAL_PORT}\$" >/dev/null 2>&1; then
+      desk_log "watch: the clipboard bridge is gone. Exiting for a fresh run that restarts it."
+      exit 0
+    fi
+  fi
+
+  if [ $(( $(date +%s) - started )) -ge "$WATCH_MAX_LIFE" ]; then
+    desk_log "watch: ${WATCH_MAX_LIFE}s up, exiting for a fresh run."
+    exit 0
+  fi
+done
