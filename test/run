@@ -3,11 +3,10 @@
 #
 #   test/run
 #
-# That it needs none of those is the point. Before lib/freerdp-args.sh existed,
-# the flags were decided in the middle of the connect flow, so the question
-# "does DESK_BPP=16 really produce /bpp:16" could only be answered by connecting
-# and looking at a window. These flags carry the most hard-won knowledge in the
-# project, and they were the least verifiable thing in it.
+# That it needs none of those is the point. The knowledge in this project is
+# mostly in decisions that used to be made in the middle of the connect flow,
+# where the only way to check one was to connect and look at a window. Pulling
+# them into files a test can read is what made them checkable at all.
 set -uo pipefail
 
 ROOT="$(cd -P "$(dirname "$(/bin/realpath "${BASH_SOURCE[0]}")")/.." && pwd)"

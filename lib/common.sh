@@ -64,10 +64,11 @@ desk_load_config() {
   DESK_ROOT="$root"
 
   # DESK_CONFIG names one file and skips the search, which is what a second
-  # machine needs. The two candidates below are a single active desk: pointing
-  # them at another box means editing the file every time you switch, and the
-  # menu bar app cannot do that at all, because every row it draws runs the same
-  # `desk`. With this, a row is `DESK_CONFIG=~/.../config.other.sh desk`.
+  # machine needs. The two candidates below describe a single active machine, so
+  # pointing them at another box means editing the file every time you switch.
+  # With this, each machine is named on the spot instead:
+  # `DESK_CONFIG=~/.../config.other.sh desk-tunnel`, which is exactly how the
+  # per-machine LaunchAgents tell themselves apart.
   #
   # Named rather than found, so a typo is an error instead of a silent fall back
   # to whichever config was already there, which would connect you to the wrong
@@ -237,8 +238,8 @@ desk_ensure_master() {
 }
 
 # Forward the RDP port and prove something answers on it. A forward that fails
-# is silent by default, and the next thing you see is FreeRDP failing to connect
-# for a reason that looks like the server's fault.
+# is silent by default, and the next thing you see is the RDP client failing to
+# connect for a reason that looks like the server's fault.
 desk_forward() {
   _try_forward() {
     ssh -S "$DESK_SSH_SOCKET" -O forward \

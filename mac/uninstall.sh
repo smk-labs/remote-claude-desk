@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Undo mac/install.sh, and nothing else.
 #
-# one Karabiner asset file. It never touches your karabiner.json, your Keychain,
-# your config.sh, or anything else in your home directory.
+# It unlinks the commands from ~/bin and removes one Karabiner asset file. It
+# never touches your karabiner.json, your config.sh, or anything else in your
+# home directory.
 set -euo pipefail
 
 HERE="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,7 +30,7 @@ uninstall.sh - undo mac/install.sh.
     ./mac/uninstall.sh          remove what install.sh added
     ./mac/uninstall.sh --help   this text
 
-removes the Karabiner asset file. It leaves your Keychain item and any rules
+removes the Karabiner asset file. It leaves any rules
 you enabled in Karabiner's window alone, and tells you how to clear those.
 USAGE
 }
@@ -90,12 +91,16 @@ desk_say ""
 # what is left on purpose
 # ---------------------------------------------------------------------------
 
-desk_say "Done. Two things were left alone on purpose:"
+desk_say "Done. Three things were left alone on purpose:"
 desk_say ""
-desk_say "  * Your Keychain password. Deleting a password is not something a"
-desk_say "    script should do behind your back. Remove it yourself with:"
+desk_say "  * bin/desk-pbio, which install.sh built rather than downloaded. It is"
+desk_say "    ignored by git and costs nothing to leave; delete it by hand if you"
+desk_say "    want the checkout spotless."
 desk_say ""
-desk_say "        security delete-generic-password -s remote-claude-desk"
+desk_say "  * The per-machine LaunchAgents, if you installed any. This script"
+desk_say "    never made them, so it does not remove them. One command each:"
+desk_say ""
+desk_say "        DESK_CONFIG=<that machine's config> desk-tunnel --uninstall"
 desk_say ""
 desk_say "  * Any rules you already enabled in Karabiner. Removing the file above"
 desk_say "    does not switch off a rule Karabiner has already copied into your"

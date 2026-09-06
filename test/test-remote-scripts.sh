@@ -45,8 +45,8 @@ done
 ok "no remote payload is embedded as a string literal"
 
 # --- a latched Caps Lock is cleared, because the symptom shows up on the Mac --
-# FreeRDP mirrors this X server's LED state onto the client keyboard, so a Caps
-# Lock stuck on here lights the lamp on a Mac whose own key is off. The guard
+# An RDP client mirrors this X server's LED state onto the client keyboard, so a
+# Caps Lock stuck on here lights the lamp on a Mac whose own key is off. The guard
 # matters as much as the fix: firing unconditionally would toggle the lock ON
 # for anyone who had it deliberately off.
 layout="$(cat "$ROOT/remote/apply-layout.sh")"

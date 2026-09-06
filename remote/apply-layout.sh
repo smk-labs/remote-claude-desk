@@ -37,10 +37,11 @@ done
 
 # Unlatch Caps Lock if the session came back with it stuck on.
 #
-# The symptom is on the Mac, not here, which is what makes it baffling: FreeRDP
-# mirrors this X server's LED state onto the client keyboard, so a Caps Lock
-# latched in the session lights the Caps Lock lamp on a Mac whose own Caps Lock
-# is off. Measured on 2026-09-03: `xset q` reported "Caps Lock: on" and
+# The symptom is on the Mac, not here, which is what makes it baffling: an RDP
+# client mirrors this X server's LED state onto the client keyboard, so a Caps
+# Lock latched in the session lights the lamp on a Mac whose own Caps Lock is
+# off. Measured against FreeRDP; not re-measured against Windows App, and the
+# unlatch is kept either way because it only fires when X says the lock is on. Measured on 2026-09-03: `xset q` reported "Caps Lock: on" and
 # "LED mask: 00000001" here while the Mac's key was untouched, and one synthetic
 # Caps_Lock press cleared both.
 #

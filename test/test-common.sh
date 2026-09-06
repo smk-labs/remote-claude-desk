@@ -89,8 +89,8 @@ printf 'DESK_HOST=mybox\nDESK_USER=me\n' > "$tmp/config.sh"
                                             || ok "an unedited example config is refused"
 
 # --- DESK_CONFIG names one file and skips the search -------------------------
-# What a second machine needs: the menu bar app runs the same `desk` for every
-# row it draws, so the only thing that can differ between rows is the environment.
+# What a second machine needs. Both LaunchAgents run the same desk-tunnel, so the
+# only thing that can differ between them is the environment they carry.
 mkdir -p "$HOME/.config/remote-claude-desk"
 printf 'DESK_HOST=fromhome\nDESK_USER=u\n' > "$HOME/.config/remote-claude-desk/config.sh"
 chmod 600 "$HOME/.config/remote-claude-desk/config.sh"

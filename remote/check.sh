@@ -22,7 +22,7 @@ else p bad "xrdp is not running"; f "sudo systemctl start xrdp"; fi
 #
 # The precondition that guarantees failure while every other check is green.
 # An account made with `adduser --disabled-password` has no password, and xrdp
-# refuses it whatever is typed. What you see is FreeRDP's own credentials box,
+# refuses it whatever is typed. What you see is the client's own login box,
 # which reappears on each attempt and says nothing about why, so it reads as a
 # wrong password rather than as an account that cannot accept one.
 #
