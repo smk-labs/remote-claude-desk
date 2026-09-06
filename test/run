@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run every check in this directory. No server, no Keychain, no window.
+# Run every check in this directory. No server, no credentials, no window.
 #
 #   test/run
 #
