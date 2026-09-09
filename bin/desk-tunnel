@@ -338,7 +338,14 @@ while :; do
   # never reach the six-hour ceiling and never notice a dead clipboard bridge,
   # for as long as it kept flapping. A ceiling something can step around is not
   # a ceiling.
-  if ! desk_forward_healthy; then
+  # A live client is better proof than any probe, so do not ask twice. This also
+  # stops the watcher opening an RDP connection to a production box every
+  # fifteen seconds, which is 5,760 SSL handshakes a day, each one logged by
+  # xrdp as a failure because the probe hangs up after nineteen bytes.
+  if desk_client_attached "$DESK_LOCAL_PORT" && \
+     [ "$(desk_port_owner_pid "$DESK_LOCAL_PORT")" = "$(desk_master_pid)" ]; then
+    :
+  elif ! desk_forward_healthy; then
     recovered=0
     tries=1
     while [ "$tries" -lt "$PROBE_TRIES" ]; do

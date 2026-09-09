@@ -339,7 +339,26 @@ lacks "$tunnel_code" 'trap - EXIT' "no phase of the run is left without a trap"
 contains "$common_code" 'desk_host_reachable()' "the reachability question has its own function"
 host_code="$(awk '/^desk_host_reachable\(\)/,/^}/' "$ROOT/lib/common.sh")"
 contains "$host_code" 'ssh -G' "the real hostname comes from ssh's resolved config, not a guess"
-contains "$host_code" 'nc -z -w 5' "asking whether a host is there is bounded too"
+lacks "$host_code" 'nc -z' "a connect that always succeeds is not evidence a host is up"
+contains "$host_code" 'SSH-' "it reads the banner, which is the part a proxy cannot fake for free"
+contains "$host_code" 's.settimeout(6)' "asking whether a host is there is bounded too"
+
+# Measured: `nc -z` to ousmousa returns in 0.00s whether the box is up or not,
+# 47 times out of 47, because something on the path accepts on its behalf. A
+# real read of the same host took 1.8s. Answering "up" wrongly is the expensive
+# direction: it cuts the backoff short and spends a TOTP code every fifteen
+# seconds against a host that is gone.
+
+# --- a live client outranks a synthetic probe --------------------------------
+#
+# A session in use is a continuous round trip through the same forward and fails
+# the instant the tunnel does. The probe is for when nobody is connected, which
+# is also when it is cheap; while someone is connected it is the likeliest to
+# misfire and the most expensive to get wrong.
+contains "$common_code" 'desk_client_attached()' "there is a way to ask whether anyone is actually connected"
+contains "$tunnel_code" 'desk_client_attached "$DESK_LOCAL_PORT"' "the watcher trusts a live client over its own probe"
+attached_code="$(awk '/^desk_client_attached\(\)/,/^}/' "$ROOT/lib/common.sh")"
+contains "$attached_code" '-sTCP:ESTABLISHED' "attached means an established connection, not a listener"
 
 # --- the clipboard bridge survives an outage ----------------------------------
 #

@@ -668,6 +668,23 @@ path logging its own reason, signals included.
 be confirmed before you act. The asymmetry decides it. A missed real failure
 here costs six seconds. A false alarm costs the session someone is working in.
 
+**Two the fix itself needed.** The new "is the box actually off" check used
+`nc -z`, and on this Mac that connects in 0.00 seconds to ousmousa whether the
+box is up or not, 47 out of 47 times, because something on the path accepts on
+its behalf. A real read of the same host takes 1.8 seconds. It reads the SSH
+banner now. Being wrong in that direction was the expensive one: it would have
+cut the backoff short and spent a code every fifteen seconds against a host that
+was gone, which is the thing the backoff exists to prevent.
+
+And the probe stopped running while somebody is connected. A live session is a
+continuous round trip through the same forward and fails the instant the tunnel
+does, so it is better evidence than any synthetic handshake. The probe was
+loudest exactly where it was least needed: while a session is up, xrdp is busy
+serving it, so the probe is most likely to time out and the teardown lands on
+someone's work. It also stops opening an RDP connection to a production box
+every fifteen seconds, 5,760 SSL handshakes a day, each logged by xrdp as a
+failure because the probe hangs up after nineteen bytes.
+
 One more, found while fixing it. The confirm loop's first shape said
 `continue 2`, which jumped back to the top and past both the six-hour ceiling
 and the clipboard check below it: a link missing one probe a minute would have

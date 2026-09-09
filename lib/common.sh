@@ -300,16 +300,55 @@ desk_rdp_probe() {
 # is the one question the failure backoff actually needs. DESK_HOST is an ssh
 # alias, so the real name comes out of ssh's own resolved config rather than
 # being guessed.
+#
+# It reads the banner, and that is not belt and braces. `nc -z` to ousmousa
+# returns in 0.00 seconds whether the box is up or not, because something on the
+# path here accepts the connection on its behalf: 47 connects in three minutes,
+# every one instant, while a real read took 1.8 seconds. A connect that always
+# succeeds is not evidence of anything. Answering "yes, it is up" wrongly is the
+# expensive direction too: it cuts the backoff short and spends a TOTP code
+# every fifteen seconds against a host that is actually gone, which is the exact
+# thing the backoff exists to prevent.
 desk_host_reachable() {
-  local hn port
+  local hn port banner
   hn="$(ssh -G "$DESK_HOST" 2>/dev/null | awk '/^hostname /{print $2; exit}')"
   port="$(ssh -G "$DESK_HOST" 2>/dev/null | awk '/^port /{print $2; exit}')"
   [ -n "$hn" ] || return 1
-  nc -z -w 5 "$hn" "${port:-22}" >/dev/null 2>&1
+  # python3 rather than nc, and not for elegance. macOS nc gives no shape that
+  # both reads the banner and ends by itself: plain nc quits the moment stdin
+  # closes, which is before the banner arrives, and `nc -d` ignores stdin but
+  # then ignores -w too, spinning a core for two minutes on a connection that
+  # was already answered. socket.settimeout bounds the connect AND the read with
+  # one number. python3 is already required here: the bridge, the agent and half
+  # of remote/ are written in it.
+  python3 - "$hn" "${port:-22}" <<'PROBE'
+import socket, sys
+s = socket.socket()
+s.settimeout(6)
+try:
+    s.connect((sys.argv[1], int(sys.argv[2])))
+    sys.exit(0 if s.recv(4)[:4] == b"SSH-" else 1)
+except Exception:
+    sys.exit(1)
+finally:
+    s.close()
+PROBE
 }
 
 # Is the tunnel usable right now? Cheap enough to ask every few seconds, which
 # is what desk-tunnel --watch does with it.
+# Is a client actually attached to the forwarded port right now.
+#
+# When one is, it is better evidence than any probe: a live RDP session is a
+# continuous round trip through the same forward, and it fails the instant the
+# tunnel does. The synthetic probe is for when nobody is connected, which is
+# also when it is cheap. While someone IS connected the probe is the most likely
+# to misfire, because xrdp is busy serving them, and the most expensive to get
+# wrong, because the teardown lands on a session someone is using.
+desk_client_attached() {
+  lsof -nP -iTCP:"$1" -sTCP:ESTABLISHED 2>/dev/null | grep -q ESTABLISHED
+}
+
 desk_forward_healthy() {
   local mpid opid
   mpid="$(desk_master_pid)"
