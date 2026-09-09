@@ -604,7 +604,8 @@ asked whether the port a client would dial actually carried RDP.
   client is about to ask.
 - `desk-tunnel --watch` asks it every fifteen seconds and exits when the answer
   changes. `KeepAlive` restarts it. Measured: master killed, tunnel proven back
-  up 11 seconds later, including a fresh TOTP login.
+  up 11 seconds later, including a fresh TOTP login. (Trap 21 is what happened
+  when one answer was allowed to decide that.)
 - a failure to *establish* backs off, doubling to a ten-minute ceiling, because
   a `KeepAlive` job against a box that is switched off would otherwise spend a
   TOTP code every fifteen seconds, and trap 16 is what that leads to. A tunnel
@@ -615,6 +616,64 @@ in both failure modes this repo actually has: the other machine's master holding
 the same port number, and a master that survived a network drop with every
 channel dead. Ask the question the caller will ask, or do not claim to have
 asked it.
+
+## Trap 21: the watcher tore down the tunnels it was there to protect
+
+Trap 20 ends with a watcher that proves the tunnel with a real handshake and
+exits the moment the proof fails. The proof was right. Acting on one of them was
+not.
+
+**The mechanism.** The probe rides the same SSH master the desktop's own pixels
+ride, so what it costs is whatever the link is doing at that instant. Measured
+on a quiet link:
+
+| tunnel | median | worst |
+| --- | --- | --- |
+| ousmousa | 0.61s | 1.57s |
+| claude-box | 0.11s | 0.38s |
+
+The ceiling was three seconds. The slower machine had two lengths of headroom,
+and a burst of frames was enough to eat it. One miss, and a healthy tunnel was
+torn down and rebuilt.
+
+**How often.** 173 teardowns in four days across both machines, about fifty a
+day, sometimes both hosts inside the same second. Two independent hosts failing
+together is a fact about this Mac, not about either box. And 57% of the rebuilds
+succeeded within a minute, which is the signature of a probe that was wrong
+rather than a tunnel that was down. Each one killed a live session and spent a
+TOTP code.
+
+**What it hid.** On the night it was found there really was an outage, 29
+minutes of it, and three separate pieces of recovery machinery each made it
+longer than the network did.
+
+- The backoff kept serving a sentence after its reason ended. It exists for a
+  box that is OFF. Five failures put it on a 480 second hold; the network
+  returned minutes later and the tunnel stayed down for the rest of it. It asks
+  now, and a host that answers SSH gets 15 seconds instead.
+- The clipboard bridge gave up for good on a single failed round trip, because
+  `install_agent` ran once above the ten-try backoff loop instead of inside it.
+  A thirty second drop was enough to end it until a person noticed by hand.
+- A run that ended said nothing at all. `trap - EXIT` after the tunnel came up
+  left the whole watching phase silent, so two watchers could stop together with
+  161 launchd runs behind them and no line anywhere saying why.
+
+**The fix.** Confirm before acting, and never punish a condition that has ended.
+Three probes two seconds apart, an eight second ceiling, a hold that checks
+whether the box is actually gone, install inside the retry loop, and every exit
+path logging its own reason, signals included.
+
+**The general shape.** A check that cannot fail is not a check, which is trap
+20. Trap 21 is its other half: a check whose failure is expensive to act on must
+be confirmed before you act. The asymmetry decides it. A missed real failure
+here costs six seconds. A false alarm costs the session someone is working in.
+
+One more, found while fixing it. The confirm loop's first shape said
+`continue 2`, which jumped back to the top and past both the six-hour ceiling
+and the clipboard check below it: a link missing one probe a minute would have
+watched forever. A ceiling something can step around is not a ceiling. Verified
+by running the loop's own text against a stubbed probe, both ways, rather than
+by reading it.
 
 ## What is not verified
 
