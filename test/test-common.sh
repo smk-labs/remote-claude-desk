@@ -272,7 +272,31 @@ contains "$common_code" 'x03\x00\x00\x13' "the check is a real X.224 handshake, 
 # The probe has to end by itself. A check that can hang is worse than no check:
 # the watcher blocks on it and stops watching, which is the failure it exists to
 # catch, arriving through the door marked prevention.
-contains "$common_code" 'nc -w 3' "the handshake probe has its own ceiling"
+contains "$common_code" 'nc -w "${DESK_PROBE_TIMEOUT:-8}"' "the handshake probe has its own ceiling"
+
+# Eight seconds, not three, and the number is evidence rather than taste. The
+# probe rides the same SSH master as the desktop's pixels: measured quiet,
+# ousmousa answers in 0.61s median and 1.57s worst against claude-box's 0.11s
+# and 0.38s. Three seconds gave the slower link two lengths of headroom and the
+# watcher tore down a live session every time a frame burst ate one, 173 times
+# in four days across both machines.
+contains "$common_code" 'DESK_PROBE_TIMEOUT:-8' "the ceiling has room for the slower of the two links"
+
+# A tunnel is declared dead by several failures, never by one. The asymmetry is
+# the argument: a missed real failure costs six seconds, a false alarm costs the
+# session you were working in, plus a TOTP code on the machine that has 2FA.
+contains "$tunnel_src" 'DESK_PROBE_TRIES:-3' "one failed probe is not a dead tunnel"
+contains "$tunnel_src" 'Not rebuilding' "a probe that misses and recovers is logged, not swallowed"
+# `continue 2` was the first shape and it was wrong: it jumped past the two
+# checks below it, so a link missing one probe a minute would never reach the
+# six-hour ceiling and never notice a dead clipboard bridge. A recovered probe
+# has to fall through the rest of the body like any other tick.
+lacks "$tunnel_code" 'continue 2' "a recovered probe does not skip the checks below it"
+contains "$tunnel_code" 'recovered=1' "a recovered probe falls through to the ceiling and the bridge check"
+
+# The clipboard is checked every minute, not every five. Five minutes of a
+# silently dead bridge is five minutes of copying into a void.
+contains "$tunnel_src" 'DESK_BRIDGE_EVERY:-4' "a dead clipboard bridge is noticed within about a minute"
 
 # --- the agent watches, it does not tick --------------------------------------
 #
@@ -297,7 +321,39 @@ contains "$tunnel_src" 'DESK_WATCH_MAX_LIFE:-21600' "the watcher hands back to l
 # ThrottleInterval allows, and every restart against ousmousa spends a TOTP code
 # at the login prompt. A box switched off for an hour would burn 120 of them.
 contains "$tunnel_src" '"$wait" -gt 600' "a host that is simply off is retried at most every ten minutes"
-contains "$tunnel_src" 'trap - EXIT' "a tunnel that came up and dropped is rebuilt at once, not after a penalty"
+contains "$tunnel_code" "printf '0' > \"\$FAIL_FILE\"" "a tunnel that came up and dropped is rebuilt at once, not after a penalty"
+
+# ...and the hold has to end when its reason does. An outage drove the counter
+# to five, the network came back two minutes later, and the tunnel stayed down
+# for the remaining eight minutes of a penalty aimed at a box that was off. The
+# box was not off. Ask before serving the sentence.
+contains "$tunnel_src" 'desk_host_reachable' "a long hold is cut short once the far host answers again"
+
+# Every exit says why. Removing the backoff trap once the tunnel was up left the
+# whole watching phase silent, so a run could end and be restarted with nothing
+# in the log at all. Two watchers did exactly that, and the only evidence left
+# was launchd's run counter.
+contains "$tunnel_src" 'trap _log_exit EXIT' "a run that ends explains itself, even when it succeeds"
+contains "$tunnel_src" '_log_signal SIGTERM' "a run killed by a signal says so rather than vanishing"
+lacks "$tunnel_code" 'trap - EXIT' "no phase of the run is left without a trap"
+contains "$common_code" 'desk_host_reachable()' "the reachability question has its own function"
+host_code="$(awk '/^desk_host_reachable\(\)/,/^}/' "$ROOT/lib/common.sh")"
+contains "$host_code" 'ssh -G' "the real hostname comes from ssh's resolved config, not a guess"
+contains "$host_code" 'nc -z -w 5' "asking whether a host is there is bounded too"
+
+# --- the clipboard bridge survives an outage ----------------------------------
+#
+# Installing the agent used to run once, above the retry loop, and a single
+# failed round trip ended the bridge for good: "giving up", return 1, with a
+# ten-try backoff sitting unused a few lines below. A thirty-second drop was
+# enough, and the clipboard then stayed dead until a person noticed by hand.
+# Comments stripped, for the same reason the tunnel's are: a comment explaining
+# a mistake is allowed to name it, the code is what must not.
+clip_main="$(awk '/^def main\(\)/,0' "$ROOT/bin/desk-clip" | grep -v '^[[:space:]]*#')"
+lacks "$clip_main" 'could not install the remote agent, giving up' "one failed install no longer ends the bridge"
+contains "$clip_main" 'if not install_agent():' "installing the agent is retried like everything else"
+install_in_loop="$(awk '/while failures < MAX_CONSECUTIVE_FAILURES/,0' "$ROOT/bin/desk-clip")"
+contains "$install_in_loop" 'install_agent()' "the install happens inside the retry loop, not before it"
 
 # --- the clipboard rides out an outage ---------------------------------------
 #

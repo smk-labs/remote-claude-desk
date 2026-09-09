@@ -271,14 +271,41 @@ desk_port_owner_pid() {
 # An X.224 connection request gets a connection confirm, and every TPKT reply
 # starts with 0x03. That is a whole round trip through the forward, into xrdp,
 # and back, which is the only thing that actually proves the tunnel carries what
-# the client is about to send. It costs about half a second.
+# the client is about to send.
 #
-# Bounded twice: nc gives up after 3 seconds, and head stops at the first byte.
+# Bounded twice: nc gives up after DESK_PROBE_TIMEOUT seconds, and head stops at
+# the first byte.
+#
+# The ceiling is eight seconds, not three, and the difference is not taste. This
+# probe rides the same SSH master the desktop's own pixels ride, so its cost is
+# whatever that link is doing at the moment it runs. Measured on a quiet link:
+# ousmousa answers in 0.61s median and 1.57s worst, claude-box in 0.11s and
+# 0.38s. Three seconds left ousmousa about two lengths of headroom, and the
+# watcher tore a live session down every time a frame burst ate it. In four days
+# that happened 173 times across both machines, and 57% of the rebuilds
+# succeeded inside a minute, which is the signature of a probe that was wrong
+# rather than a tunnel that was down. Eight seconds is five lengths, and it
+# still ends long before anyone reaches for the mouse.
 desk_rdp_probe() {
   local first
   first="$(printf '\x03\x00\x00\x13\x0e\xe0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x03\x00\x00\x00' \
-    | nc -w 3 127.0.0.1 "$1" 2>/dev/null | head -c 1 | od -An -tx1 | tr -d ' \n')"
+    | nc -w "${DESK_PROBE_TIMEOUT:-8}" 127.0.0.1 "$1" 2>/dev/null \
+    | head -c 1 | od -An -tx1 | tr -d ' \n')"
   [ "$first" = "03" ]
+}
+
+# Is the far host answering SSH at all, right now.
+#
+# Not a claim about the tunnel: this asks only whether the box is there, which
+# is the one question the failure backoff actually needs. DESK_HOST is an ssh
+# alias, so the real name comes out of ssh's own resolved config rather than
+# being guessed.
+desk_host_reachable() {
+  local hn port
+  hn="$(ssh -G "$DESK_HOST" 2>/dev/null | awk '/^hostname /{print $2; exit}')"
+  port="$(ssh -G "$DESK_HOST" 2>/dev/null | awk '/^port /{print $2; exit}')"
+  [ -n "$hn" ] || return 1
+  nc -z -w 5 "$hn" "${port:-22}" >/dev/null 2>&1
 }
 
 # Is the tunnel usable right now? Cheap enough to ask every few seconds, which

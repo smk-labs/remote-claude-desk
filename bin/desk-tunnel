@@ -67,7 +67,23 @@ _backoff_then_exit() {
   printf '%s' "$n" > "$FAIL_FILE"
   wait=$(( 30 * (1 << (n > 5 ? 5 : n - 1)) ))
   [ "$wait" -gt 600 ] && wait=600
-  desk_log "watch: run failed (rc=$rc, consecutive=$n). Holding ${wait}s before launchd retries."
+
+  # The hold is for a box that is OFF. It stopped being right the moment the
+  # box came back, and it used to keep sleeping anyway: an outage drove the
+  # counter to five, the network returned two minutes later, and the tunnel
+  # stayed down for the remaining eight minutes of a penalty aimed at a
+  # condition that had already ended. That is the window the user hits, and it
+  # is self-inflicted.
+  #
+  # So ask. If the far host answers SSH, the reason for the long hold is gone:
+  # wait a few seconds and let launchd try, which costs at most one TOTP code
+  # against a host that is demonstrably there.
+  if [ "$wait" -gt 30 ] && desk_host_reachable; then
+    desk_log "watch: run failed (rc=$rc, consecutive=$n), but $DESK_HOST answers SSH. Holding 15s instead of ${wait}s."
+    wait=15
+  else
+    desk_log "watch: run failed (rc=$rc, consecutive=$n). Holding ${wait}s before launchd retries."
+  fi
   sleep "$wait"
   exit "$rc"
 }
@@ -236,7 +252,30 @@ INFO
 # an immediate rebuild, not thirty seconds of penance for something that was
 # working a moment ago.
 printf '0' > "$FAIL_FILE" 2>/dev/null || true
-trap - EXIT
+
+# The backoff trap is replaced, not simply removed. Removing it left every exit
+# after this point silent, and a silent exit is a restart nobody can explain:
+# two watchers went down together one night with 161 launchd runs behind them
+# and not one line saying what ended them. A supervisor that restarts things
+# quietly turns a bug into weather.
+#
+# So from here on, every way out says so, signals included. It costs one line in
+# the log per run and it is the difference between reading a cause and guessing
+# at one.
+_log_exit() {
+  local rc=$?
+  desk_log "watch: run for $DESK_HOST ended (rc=$rc)"
+  exit "$rc"
+}
+_log_signal() {
+  desk_log "watch: run for $DESK_HOST was sent $1, stopping."
+  exit 0
+}
+trap _log_exit EXIT
+trap '_log_signal SIGTERM' TERM
+trap '_log_signal SIGHUP' HUP
+trap '_log_signal SIGINT' INT
+
 [ "$WATCH" = 1 ] || exit 0
 
 # ─── watching ───────────────────────────────────────────────────────────────
@@ -259,7 +298,17 @@ WATCH_INTERVAL="${DESK_WATCH_INTERVAL:-15}"
 # process that has been alive since a laptop was last rebooted is a process
 # nobody has proved still works. Six hours, then hand back to launchd.
 WATCH_MAX_LIFE="${DESK_WATCH_MAX_LIFE:-21600}"
-BRIDGE_EVERY=20
+# How many probes must fail before the tunnel is declared dead, and how long to
+# wait between them. Three tries two seconds apart: a burst of jitter is ridden
+# out, a genuinely dead forward is still called within six seconds.
+PROBE_TRIES="${DESK_PROBE_TRIES:-3}"
+PROBE_GAP="${DESK_PROBE_GAP:-2}"
+# The clipboard bridge is checked every fourth tick, so a minute at the default
+# interval rather than the five minutes this used to be. A pgrep costs nothing
+# and five minutes of a silently dead clipboard is five minutes of copying into
+# a void, which is exactly how the last outage was noticed: by hand, by a
+# person, long after the machinery could have said so.
+BRIDGE_EVERY="${DESK_BRIDGE_EVERY:-4}"
 
 desk_log "watch: up on 127.0.0.1:$DESK_LOCAL_PORT, checking every ${WATCH_INTERVAL}s"
 started="$(date +%s)"
@@ -269,9 +318,42 @@ while :; do
   sleep "$WATCH_INTERVAL"
   tick=$((tick + 1))
 
+  # One failed probe is not a dead tunnel, and treating it as one is what made
+  # this setup feel unreliable. The probe shares the SSH master with the
+  # desktop's own pixels, so a frame burst or a moment of jitter can eat it
+  # while the session it is testing is perfectly fine. Every teardown here kills
+  # a live RDP session and, on ousmousa, spends a TOTP code on the rebuild.
+  #
+  # So a failure has to be confirmed: PROBE_TRIES attempts, PROBE_GAP apart,
+  # and only all of them failing is a tunnel worth rebuilding. The cost of
+  # being wrong is asymmetric, which is the whole argument. A missed real
+  # failure costs about six extra seconds before the rebuild starts. A false
+  # alarm costs the session you were working in.
+  #
+  # A miss that recovers is logged rather than swallowed, because a link that
+  # is quietly flapping is worth seeing before it becomes an outage.
+  # A recovered probe falls THROUGH to the rest of the body rather than jumping
+  # back to the top. The first version said `continue 2`, and that quietly
+  # skipped both checks below it: a link that missed one probe a minute would
+  # never reach the six-hour ceiling and never notice a dead clipboard bridge,
+  # for as long as it kept flapping. A ceiling something can step around is not
+  # a ceiling.
   if ! desk_forward_healthy; then
-    desk_log "watch: 127.0.0.1:$DESK_LOCAL_PORT stopped answering RDP. Exiting so launchd rebuilds it."
-    exit 1
+    recovered=0
+    tries=1
+    while [ "$tries" -lt "$PROBE_TRIES" ]; do
+      sleep "$PROBE_GAP"
+      tries=$((tries + 1))
+      if desk_forward_healthy; then
+        desk_log "watch: 127.0.0.1:$DESK_LOCAL_PORT missed a probe, answered on try $tries. Not rebuilding."
+        recovered=1
+        break
+      fi
+    done
+    if [ "$recovered" = 0 ]; then
+      desk_log "watch: 127.0.0.1:$DESK_LOCAL_PORT failed $PROBE_TRIES probes in a row. Exiting so launchd rebuilds it."
+      exit 1
+    fi
   fi
 
   # The bridge dies on its own terms: desk-clip stops after enough consecutive

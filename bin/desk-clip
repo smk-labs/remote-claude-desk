@@ -424,10 +424,6 @@ def main():
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
 
-    if not install_agent():
-        log("could not install the remote agent, giving up")
-        return 1
-
     # Reconnect rather than exit. The SSH master can drop while the session
     # itself is perfectly fine, and the old behaviour was to return here and
     # leave `desk` running with a clipboard that had silently stopped working.
@@ -445,6 +441,24 @@ def main():
     failures = 0
     first = True
     while failures < MAX_CONSECUTIVE_FAILURES:
+        # Installing the agent is INSIDE the loop, and that is the whole point.
+        # It used to run once above it, and a single failed round trip ended the
+        # bridge for good: "could not install the remote agent, giving up",
+        # return 1, with the ten-try backoff below left untouched a few lines
+        # away. A thirty-second network drop was enough. The clipboard then
+        # stayed dead until something else happened to restart it, which on the
+        # night this was found was a person noticing by hand.
+        #
+        # The retry that already existed for RUNNING the agent is the same
+        # retry that INSTALLING it needs, for the same reason, against the same
+        # outage. One loop, both steps.
+        if not install_agent():
+            failures += 1
+            log("could not install the remote agent (attempt %d of %d)"
+                % (failures, MAX_CONSECUTIVE_FAILURES))
+            time.sleep(backoff(failures - 1))
+            continue
+
         ag = start_agent()
         if ag is None:
             failures += 1
