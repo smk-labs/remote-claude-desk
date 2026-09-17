@@ -25,11 +25,16 @@ owner=$(stat -c %U "/tmp/.X11-unix/X$n" 2>/dev/null || echo "?")
 # them: Claude Desktop ships Claude Code and the ChatGPT app ships Codex, so
 # either can start an agent that would otherwise read plugins, skills and MCP
 # servers from the central ~/.claude or ~/.codex.
-export CLAUDE_CONFIG_DIR="$ROOT/agent/claude"
-export CODEX_HOME="$ROOT/agent/codex"
+#
+# CLAUDE_CONFIG_DIR keeps the name the first deployment gave it. Renaming it to
+# something tidier would point a live install at an empty directory and abandon
+# the plugins, projects and MCP auth already sitting in the old one, silently
+# and with no error: the app would just look freshly reset.
+export CLAUDE_CONFIG_DIR="$ROOT/claude-config"
+export CODEX_HOME="$ROOT/codex-home"
 export XDG_CONFIG_HOME="$ROOT/xdg/config"
 export XDG_CACHE_HOME="$ROOT/xdg/cache"
-mkdir -p "$ROOT"/agent/{claude,codex} "$ROOT"/xdg/{config,cache} "$ROOT"/{profile,work,logs}
+mkdir -p "$ROOT"/{claude-config,codex-home} "$ROOT"/xdg/{config,cache} "$ROOT"/{profile,work,logs}
 chmod 700 "$ROOT" 2>/dev/null || true
 
 # XDG_DATA_HOME is deliberately NOT redirected. The secret store is the session
@@ -37,14 +42,23 @@ chmod 700 "$ROOT" 2>/dev/null || true
 # the app at a different data dir does not move that keyring (it lives with the
 # daemon that owns org.freedesktop.secrets), it only breaks the lookup.
 
-# Per-host settings, mode 600, never in git. PROXY_URL is the one that matters:
-# a box whose egress is blocked needs it, a box with clean egress must not have
-# it. Kept out of the launcher so the proxy can change without a reinstall.
+# Per-host settings, mode 600, never in git. PROXY_URL is the only one so far:
+# a box whose egress is blocked needs it, and a box with clean egress must NOT
+# have it, because a proxy that is configured but down fails closed and looks
+# exactly like a broken app. Kept out of the launcher so the proxy can change
+# without a reinstall.
 if [ -r "$ROOT/env" ]; then . "$ROOT/env"; fi
 
+# --in-process-gpu is not cosmetic. Without it Chromium tries to spawn a GPU
+# process, fails with error_code=1002 and retries forever: one Claude log on
+# claude-box held 45,807 of them, and ZCode reproduces it in 25 seconds on both
+# boxes, the one with a /dev/dri it cannot open and the one with no device at
+# all. Since --disable-gpu already means there is no real GPU work, running the
+# remaining GPU thread in-process removes the spawn rather than asking it to
+# fail more quietly.
 flags=(
   --user-data-dir="$ROOT/profile"
-  --disable-gpu --disable-gpu-compositing
+  --disable-gpu --disable-gpu-compositing --in-process-gpu
   --password-store=gnome-libsecret
 )
 

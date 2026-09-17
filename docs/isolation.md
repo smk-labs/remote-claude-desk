@@ -15,9 +15,11 @@ The Desktop profile holds the app's own state. Claude Code sessions read
 plugins, skills and MCP servers from somewhere else entirely.
 
 - `--user-data-dir="$ROOT/profile"` covers the app: windows, cache, login state
-- `CLAUDE_CONFIG_DIR="$ROOT/agent/claude"` covers Claude Code. It ignores the
-  app profile completely and defaults to `~/.claude`
-- `CODEX_HOME="$ROOT/agent/codex"` does the same for Codex. The ChatGPT Linux
+- `CLAUDE_CONFIG_DIR="$ROOT/claude-config"` covers Claude Code. It ignores the
+  app profile completely and defaults to `~/.claude`. The name is load-bearing:
+  live installs already hold hundreds of MB there, and renaming the directory
+  would point them at an empty one with no error
+- `CODEX_HOME="$ROOT/codex-home"` does the same for Codex. The ChatGPT Linux
   app is the Codex build, so it ships the same leak under a different name
 - both agent homes are set for every app, not just the one that owns them,
   because either app can start an agent
