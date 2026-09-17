@@ -70,6 +70,11 @@ flag is not enough to do it.
   native agent binaries whose own HTTP clients would otherwise egress direct
 - a box with clean egress must **not** have the file. A proxy that is configured
   but down fails closed, which looks exactly like the app being broken
+- the file is read once, at launch. Writing it while the app is running changes
+  nothing, and relaunching does not help either: Electron's single-instance lock
+  hands the second launch to the instance already running, which silently keeps
+  the old flags. Check `--proxy-server` on the actual process, not the file, and
+  quit the app fully before expecting a change to take
 
 ## What this does not cover
 
