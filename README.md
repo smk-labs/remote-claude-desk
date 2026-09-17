@@ -183,7 +183,7 @@ test/                 run, plus the checks it runs
 mac/                  install.sh, uninstall.sh, the Karabiner rules, the
                       pasteboard reader
 server/               install.sh, the orphan reaper, the listener lock, the
-                      isolated Claude Desktop launcher
+                      isolated app launcher template
 docs/                 how each fix was measured, and which diagnoses were wrong
 ```
 

@@ -14,7 +14,6 @@
 set -euo pipefail
 
 DESK_USER="${SUDO_USER:-$(id -un)}"
-DESK_ISOLATED_ROOT=""
 WANT_STAMP=""
 KEEP_GROUP=0
 ASSUME_YES=0
@@ -24,7 +23,6 @@ usage() {
 Usage: sudo ./uninstall.sh [options]
 
   --user NAME            account the install was made for (default: $DESK_USER)
-  --isolated-root DIR    isolated Claude Desktop root (default: <user home>/claude-isolated)
   --stamp YYYYmmdd-HHMMSS  restore this backup set (default: the newest one)
   --keep-group           leave user 'xrdp' in group 'ssl-cert'
   --yes                  skip the confirmation prompt
@@ -35,7 +33,6 @@ USAGE
 while [ $# -gt 0 ]; do
   case "$1" in
     --user)          DESK_USER="${2:?--user needs a value}"; shift 2 ;;
-    --isolated-root) DESK_ISOLATED_ROOT="${2:?--isolated-root needs a value}"; shift 2 ;;
     --stamp)         WANT_STAMP="${2:?--stamp needs a value}"; shift 2 ;;
     --keep-group)    KEEP_GROUP=1; shift ;;
     --yes|-y)        ASSUME_YES=1; shift ;;
@@ -61,7 +58,6 @@ fi
 
 getent passwd "$DESK_USER" >/dev/null || die "No such user: $DESK_USER"
 DESK_HOME=$(getent passwd "$DESK_USER" | cut -d: -f6)
-[ -n "$DESK_ISOLATED_ROOT" ] || DESK_ISOLATED_ROOT="$DESK_HOME/claude-isolated"
 
 session_live() { pgrep -u "$DESK_USER" -f 'xrdp/xorg.conf' >/dev/null 2>&1; }
 
@@ -97,9 +93,8 @@ Will remove:
   /etc/systemd/system/xrdp-lock-user.service (stopped and disabled first)
   /etc/systemd/system/xrdp-sesman.service.d/reap-orphans.conf
   /usr/local/sbin/xrdp-reap-orphans
-  $DESK_HOME/.local/share/applications/claude-desktop-isolated.desktop
-  $DESK_HOME/.local/share/applications/claude-desktop.desktop (the NoDisplay shadow)
-  $DESK_ISOLATED_ROOT/bin/claude-desktop-isolated
+  every *-isolated launcher and menu entry under $DESK_HOME, whichever apps
+  were installed, plus the NoDisplay shadows that hide the packaged entries
 PLAN
 if [ "$KEEP_GROUP" = 1 ]; then
   say "  group ssl-cert   left alone (--keep-group)"
@@ -109,7 +104,7 @@ fi
 cat <<PLAN
 
 Will NOT touch:
-  $DESK_ISOLATED_ROOT itself, so profile, work and logs stay where they are.
+  the isolated roots themselves, so profile, work and logs stay where they are.
   The backup files. Delete them yourself once you are happy.
 PLAN
 
@@ -203,22 +198,36 @@ else
   skip "no remote-claude-desk lines in /etc/pam.d/xrdp-sesman"
 fi
 
-step "6. remove the isolated Claude Desktop launcher"
-for f in \
-  "$DESK_ISOLATED_ROOT/bin/claude-desktop-isolated" \
-  "$DESK_HOME/.local/share/applications/claude-desktop-isolated.desktop" \
-  "$DESK_HOME/.local/share/applications/claude-desktop.desktop"
-do
-  if [ -f "$f" ]; then
-    $SUDO rm -f "$f"
-    did "removed $f"
-  else
-    skip "not present: $f"
+step "6. remove the isolated launchers and menu entries"
+# Found by reading the entries, not by guessing filenames. The install names
+# each shadow after the vendor's packaged file (com.anthropic.Claude.desktop,
+# not claude-desktop.desktop), so a hardcoded list misses it and leaves a live
+# unisolated entry in the menu after an uninstall that reported success.
+DESKTOP_DIR="$DESK_HOME/.local/share/applications"
+REMOVED=0
+for entry in "$DESKTOP_DIR"/*.desktop; do
+  [ -f "$entry" ] || continue
+
+  if grep -q 'do not use - not isolated' "$entry"; then
+    $SUDO rm -f "$entry"
+    did "removed shadow entry $entry"
+    REMOVED=1
+    continue
+  fi
+
+  launcher=$(grep -m1 -oE '^Exec=[^ ]*-isolated' "$entry" | cut -d= -f2- || true)
+  [ -n "$launcher" ] || continue
+
+  $SUDO rm -f "$entry"
+  did "removed menu entry $entry"
+  REMOVED=1
+  if [ -f "$launcher" ]; then
+    $SUDO rm -f "$launcher"
+    did "removed launcher $launcher"
+    say "   kept: $(dirname "$(dirname "$launcher")") (profile, work and logs are still there)"
   fi
 done
-if [ -d "$DESK_ISOLATED_ROOT" ]; then
-  say "   kept: $DESK_ISOLATED_ROOT (profile, work and logs are still there)"
-fi
+[ "$REMOVED" = 1 ] || skip "no isolated launchers or shadow entries found"
 
 step "7. group membership"
 if [ "$KEEP_GROUP" = 1 ]; then

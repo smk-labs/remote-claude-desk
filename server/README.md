@@ -21,15 +21,17 @@ behind.
   an edit of the packaged unit, which an upgrade would undo. It kills X servers
   that outlived sesman.
 
-Opt-in: `--keyring` unlocks the login keyring at RDP login, so Claude Desktop
-stays signed in. `--claude` installs the isolated launcher.
+Opt-in: `--keyring` unlocks the login keyring at RDP login, so the apps stay
+signed in. `--app NAME` installs one isolated launcher, and repeats for more.
+Known apps: `claude`, `chatgpt`, `zcode`. The vendor package has to be installed
+already; this installer isolates it, it does not fetch it.
 
 ## Install
 
 Run it on the server, from this directory.
 
 ```sh
-sudo ./install.sh --user alice --keyring --claude
+sudo ./install.sh --user alice --keyring --app claude --app chatgpt --app zcode
 ```
 
 It prints the plan, asks once, then acts. Steps check first, so re-running is
@@ -42,7 +44,7 @@ safe. Edited config files get a `.rcd-bak-<timestamp>` copy, and
 | `uninstall.sh` | reverses it from the timestamped backups |
 | `xrdp-lock-user.service` | template, one iptables OWNER rule |
 | `xrdp-reap-orphans` | kills X servers that outlived sesman |
-| `claude-desktop-isolated` | template, Claude Desktop with its own config and profile |
+| `app-isolated` | template, one desktop app with its own config and profile |
 
 Templates carry `@DESK_USER@` style placeholders. `install.sh` fills them in,
 so the files in git stay generic.

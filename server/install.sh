@@ -26,10 +26,52 @@ DESK_USER="${SUDO_USER:-$(id -un)}"
 DESK_RDP_ADDR="127.0.0.77"
 DESK_RDP_PORT="33890"
 DESK_DISPLAY_MIN="150"
-DESK_ISOLATED_ROOT=""          # filled from the target user's home below
+DESK_ISOLATED_ROOT=""          # only with a single --app; otherwise per-app default
 DO_KEYRING=0
-DO_CLAUDE=0
+APPS=()
 ASSUME_YES=0
+
+# ─── the apps this installer knows how to isolate ────────────────────────────
+# All three are Electron, which is why one template covers them: --user-data-dir,
+# --password-store and --proxy-server are Chromium flags. EXEC_RE finds the
+# packaged menu entry by what it RUNS, never by filename, because vendors name
+# that file after their bundle id (com.anthropic.Claude.desktop) rather than
+# after the binary.
+KNOWN_APPS=(claude chatgpt zcode)
+
+app_load() {  # app_load <name>; fills the APP_* globals for one app
+  APP_ID=$1
+  case "$APP_ID" in
+    claude)
+      APP_BIN=/usr/bin/claude-desktop
+      APP_LAUNCHER=claude-desktop-isolated
+      APP_LABEL="Claude"
+      APP_ICON=claude-desktop
+      APP_WMCLASS=Claude
+      APP_EXEC_RE='^Exec=([^ ]*/)?claude-desktop( |$)'
+      ;;
+    chatgpt)
+      APP_BIN=/usr/bin/chatgpt
+      APP_LAUNCHER=chatgpt-isolated
+      APP_LABEL="ChatGPT"
+      APP_ICON=chatgpt
+      APP_WMCLASS=ChatGPT
+      APP_EXEC_RE='^Exec=([^ ]*/)?chatgpt( |$)'
+      ;;
+    zcode)
+      APP_BIN=/usr/bin/zcode
+      APP_LAUNCHER=zcode-isolated
+      APP_LABEL="ZCode"
+      APP_ICON=zcode
+      APP_WMCLASS=ZCode
+      APP_EXEC_RE='^Exec=([^ ]*/)?zcode( |$)'
+      ;;
+    *) die "Unknown app: $APP_ID (known: ${KNOWN_APPS[*]})" ;;
+  esac
+  APP_NAME="$APP_LABEL (isolated)"
+  APP_COMMENT="$APP_LABEL with its own config, cache and profile"
+  APP_ROOT="${DESK_ISOLATED_ROOT:-$DESK_HOME/$APP_ID-isolated}"
+}
 
 usage() {
   cat <<USAGE
@@ -39,9 +81,11 @@ Usage: sudo ./install.sh [options]
   --rdp-addr ADDR        loopback address xrdp listens on (default: $DESK_RDP_ADDR)
   --rdp-port PORT        port xrdp listens on (default: $DESK_RDP_PORT)
   --display-min N        lowest X display number to hand out (default: $DESK_DISPLAY_MIN)
-  --isolated-root DIR    home of the isolated Claude Desktop (default: <user home>/claude-isolated)
-  --keyring              add pam_gnome_keyring to xrdp-sesman (needed for Claude Desktop logins)
-  --claude               install the isolated Claude Desktop launcher and menu entry
+  --isolated-root DIR    home of the isolated app (only with a single --app;
+                         default: <user home>/<app>-isolated)
+  --keyring              add pam_gnome_keyring to xrdp-sesman (needed to stay logged in)
+  --app NAME             install an isolated launcher and menu entry; repeatable.
+                         Known apps: $(printf '%s ' "${KNOWN_APPS[@]}")
   --yes                  skip the confirmation prompt
   --help                 print this and exit
 USAGE
@@ -55,7 +99,7 @@ while [ $# -gt 0 ]; do
     --display-min)    DESK_DISPLAY_MIN="${2:?--display-min needs a value}"; shift 2 ;;
     --isolated-root)  DESK_ISOLATED_ROOT="${2:?--isolated-root needs a value}"; shift 2 ;;
     --keyring)        DO_KEYRING=1; shift ;;
-    --claude)         DO_CLAUDE=1; shift ;;
+    --app)            APPS+=("${2:?--app needs a value}"); shift 2 ;;
     --yes|-y)         ASSUME_YES=1; shift ;;
     --help|-h)        usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
@@ -93,12 +137,24 @@ getent passwd "$DESK_USER" >/dev/null || die "No such user: $DESK_USER"
 DESK_UID=$(id -u "$DESK_USER")
 DESK_HOME=$(getent passwd "$DESK_USER" | cut -d: -f6)
 [ -d "$DESK_HOME" ] || die "Home directory of $DESK_USER does not exist: $DESK_HOME"
-[ -n "$DESK_ISOLATED_ROOT" ] || DESK_ISOLATED_ROOT="$DESK_HOME/claude-isolated"
+# One --isolated-root cannot serve two apps: they would share a profile, which
+# is the one thing this whole setup exists to prevent. Caught here rather than
+# at the second install, which would silently overwrite the first.
+if [ -n "$DESK_ISOLATED_ROOT" ] && [ "${#APPS[@]}" -gt 1 ]; then
+  die "--isolated-root takes a single --app. Run the installer once per app, or drop it and take the per-app default."
+fi
+
+# Names are checked before anything is changed, so a typo in the third --app
+# does not leave the first two half-installed.
+for a in "${APPS[@]:-}"; do
+  [ -n "$a" ] || continue
+  case " ${KNOWN_APPS[*]} " in *" $a "*) ;; *) die "Unknown app: $a (known: ${KNOWN_APPS[*]})" ;; esac
+done
 
 case "$DESK_RDP_PORT" in ''|*[!0-9]*) die "--rdp-port must be a number" ;; esac
 case "$DESK_DISPLAY_MIN" in ''|*[!0-9]*) die "--display-min must be a number" ;; esac
 
-for f in xrdp-lock-user.service claude-desktop-isolated xrdp-reap-orphans; do
+for f in xrdp-lock-user.service app-isolated xrdp-reap-orphans; do
   [ -f "$SELF_DIR/$f" ] || die "Missing $SELF_DIR/$f. Run install.sh from the repo's server/ directory."
 done
 
@@ -135,12 +191,15 @@ if [ "$DO_KEYRING" = 1 ]; then
 else
   say "  5. pam        SKIPPED (pass --keyring to unlock the login keyring at RDP login)"
 fi
-if [ "$DO_CLAUDE" = 1 ]; then
-  say "  6. claude     $DESK_ISOLATED_ROOT/bin/claude-desktop-isolated (root chmod 700)"
-  say "                $DESK_HOME/.local/share/applications/claude-desktop-isolated.desktop"
-  say "                a user-level claude-desktop.desktop with NoDisplay=true, to hide the shared one"
+if [ "${#APPS[@]}" -eq 0 ]; then
+  say "  6. apps       SKIPPED (pass --app NAME to install an isolated launcher)"
 else
-  say "  6. claude     SKIPPED (pass --claude to install the isolated launcher)"
+  for a in "${APPS[@]}"; do
+    app_load "$a"
+    say "  6. $(printf '%-10s' "$APP_ID")$APP_ROOT/bin/$APP_LAUNCHER (root chmod 700)"
+    say "                $DESK_HOME/.local/share/applications/$APP_LAUNCHER.desktop"
+    say "                a user-level shadow with NoDisplay=true, to hide the packaged $APP_LABEL entry"
+  done
 fi
 cat <<PLAN
 
@@ -175,7 +234,9 @@ subst() {  # subst <src> ; writes the filled template to stdout
       -e "s|@DESK_RDP_ADDR@|$(esc "$DESK_RDP_ADDR")|g" \
       -e "s|@DESK_RDP_PORT@|$(esc "$DESK_RDP_PORT")|g" \
       -e "s|@DESK_DISPLAY_MIN@|$(esc "$DESK_DISPLAY_MIN")|g" \
-      -e "s|@DESK_ISOLATED_ROOT@|$(esc "$DESK_ISOLATED_ROOT")|g" \
+      -e "s|@APP_NAME@|$(esc "${APP_NAME:-}")|g" \
+      -e "s|@APP_ROOT@|$(esc "${APP_ROOT:-}")|g" \
+      -e "s|@APP_BIN@|$(esc "${APP_BIN:-}")|g" \
       -- "$1"
 }
 
@@ -393,103 +454,120 @@ PAM_BODY
   NEEDS_SESMAN_RESTART=1
 fi
 
-# ─── 6. the isolated Claude Desktop ──────────────────────────────────────────
-step "6. isolated Claude Desktop"
-if [ "$DO_CLAUDE" != 1 ]; then
-  skip "not requested (pass --claude)"
+# ─── 6. the isolated desktop apps ────────────────────────────────────────────
+step "6. isolated desktop apps"
+if [ "${#APPS[@]}" -eq 0 ]; then
+  skip "not requested (pass --app NAME)"
 else
   run_as_user() { run_as "$DESK_USER" "$@"; }
-  run_as_user mkdir -p "$DESK_ISOLATED_ROOT/bin" "$DESK_HOME/.local/share/applications"
-  run_as_user chmod 700 "$DESK_ISOLATED_ROOT"
-  did "created $DESK_ISOLATED_ROOT (mode 700)"
-
-  TMP_LAUNCHER=$(mktemp)
-  subst "$SELF_DIR/claude-desktop-isolated" >"$TMP_LAUNCHER"
-  LAUNCHER="$DESK_ISOLATED_ROOT/bin/claude-desktop-isolated"
-  if cmp -s "$TMP_LAUNCHER" "$LAUNCHER" 2>/dev/null; then
-    skip "launcher already matches $LAUNCHER"
-  else
-    $SUDO install -o "$DESK_USER" -g "$DESK_USER" -m 0700 -- "$TMP_LAUNCHER" "$LAUNCHER"
-    did "wrote $LAUNCHER"
-  fi
-  rm -f "$TMP_LAUNCHER"
-
   DESKTOP_DIR="$DESK_HOME/.local/share/applications"
-  TMP_ENTRY=$(mktemp)
-  cat >"$TMP_ENTRY" <<ENTRY_BODY
+  run_as_user mkdir -p "$DESKTOP_DIR"
+
+  for a in "${APPS[@]}"; do
+    app_load "$a"
+    say ""
+    say "   -- $APP_LABEL"
+
+    # The vendor package is deliberately not installed here. What lands in
+    # /usr/bin is the vendor's business, and a launcher written against a binary
+    # that is not there is a menu entry that fails at click time with nothing on
+    # screen to say why.
+    if [ ! -x "$APP_BIN" ]; then
+      warn "$APP_BIN is missing. Install the vendor package first, then re-run. Skipping $APP_ID."
+      continue
+    fi
+
+    run_as_user mkdir -p "$APP_ROOT/bin"
+    run_as_user chmod 700 "$APP_ROOT"
+    did "created $APP_ROOT (mode 700)"
+
+    TMP_LAUNCHER=$(mktemp)
+    subst "$SELF_DIR/app-isolated" >"$TMP_LAUNCHER"
+    LAUNCHER="$APP_ROOT/bin/$APP_LAUNCHER"
+    if cmp -s "$TMP_LAUNCHER" "$LAUNCHER" 2>/dev/null; then
+      skip "launcher already matches $LAUNCHER"
+    else
+      $SUDO install -o "$DESK_USER" -g "$DESK_USER" -m 0700 -- "$TMP_LAUNCHER" "$LAUNCHER"
+      did "wrote $LAUNCHER"
+    fi
+    rm -f "$TMP_LAUNCHER"
+
+    TMP_ENTRY=$(mktemp)
+    cat >"$TMP_ENTRY" <<ENTRY_BODY
 [Desktop Entry]
 Type=Application
-Name=Claude (isolated)
-Comment=Claude Desktop with its own config, cache and profile
+Name=$APP_NAME
+Comment=$APP_COMMENT
 Exec=$LAUNCHER %U
-Icon=claude-desktop
+Icon=$APP_ICON
 Terminal=false
 Categories=Development;Utility;
-StartupWMClass=Claude
+StartupWMClass=$APP_WMCLASS
 ENTRY_BODY
-  ENTRY="$DESKTOP_DIR/claude-desktop-isolated.desktop"
-  if cmp -s "$TMP_ENTRY" "$ENTRY" 2>/dev/null; then
-    skip "menu entry already matches $ENTRY"
-  else
-    $SUDO install -o "$DESK_USER" -g "$DESK_USER" -m 0644 -- "$TMP_ENTRY" "$ENTRY"
-    did "wrote $ENTRY"
-  fi
-  rm -f "$TMP_ENTRY"
-
-  # Hide the packaged launcher. Clicking it starts Claude Desktop against the
-  # central ~/.claude, which is the whole thing this setup exists to avoid.
-  # A user-level copy with NoDisplay=true shadows the system entry by desktop
-  # file id, so the packaged file itself stays untouched and survives upgrades.
-  #
-  # Found by what it RUNS, not by what it is called. This looked only for
-  # claude-desktop.desktop, and the package ships com.anthropic.Claude.desktop,
-  # so it reported "nothing to hide" and hid nothing: the menu then held two
-  # Claude entries, and the plain one is a single click away from starting the
-  # app against the central ~/.claude. The isolation was intact and trivially
-  # bypassable, which is worse than either alone because the menu gave no hint
-  # which entry was which. A hardcoded filename is a guess about somebody else's
-  # packaging; the Exec line is the thing that actually matters.
-  FOUND_PACKAGED=0
-  for packaged in /usr/share/applications/*.desktop; do
-    [ -f "$packaged" ] || continue
-    # Ours, and any copy already shadowed, are not the packaged launcher.
-    case "$(basename "$packaged")" in claude-desktop-isolated.desktop) continue ;; esac
-    # Anchored to the start of the Exec value: the binary is either bare or a
-    # full path, and "claude-desktop-isolated" must not match, which is why the
-    # name has to end at a space or end of line.
-    grep -qE '^Exec=([^ ]*/)?claude-desktop( |$)' "$packaged" || continue
-
-    FOUND_PACKAGED=1
-    HIDDEN="$DESKTOP_DIR/$(basename "$packaged")"
-    TMP_HIDDEN=$(mktemp)
-    # A short stub, not a copy of the packaged file with NoDisplay bolted on.
-    #
-    # The copy carried the packaged Actions across, and a desktop action is a
-    # second Exec line: `Actions=NewChat;NewCode;` with two [Desktop Action]
-    # groups, each starting the NON-isolated binary. Docks and launchers
-    # routinely offer actions from an entry's right-click menu, and several
-    # surface them from searches even when the entry itself is NoDisplay. So the
-    # copy hid the icon and left two live routes to the very thing being hidden.
-    #
-    # The name says what it is, too, because NoDisplay is a request rather than a
-    # guarantee: anything that does show this entry shows it labelled.
-    {
-      printf '[Desktop Entry]\n'
-      printf 'Name=Claude (do not use - not isolated)\n'
-      grep -m1 '^Exec=' "$packaged" || printf 'Exec=claude-desktop %%%%U\n'
-      grep -m1 '^Icon=' "$packaged" || printf 'Icon=claude-desktop\n'
-      printf 'Type=Application\n'
-      printf 'NoDisplay=true\n'
-    } >"$TMP_HIDDEN"
-    if cmp -s "$TMP_HIDDEN" "$HIDDEN" 2>/dev/null; then
-      skip "packaged entry $(basename "$packaged") is already hidden"
+    ENTRY="$DESKTOP_DIR/$APP_LAUNCHER.desktop"
+    if cmp -s "$TMP_ENTRY" "$ENTRY" 2>/dev/null; then
+      skip "menu entry already matches $ENTRY"
     else
-      $SUDO install -o "$DESK_USER" -g "$DESK_USER" -m 0644 -- "$TMP_HIDDEN" "$HIDDEN"
-      did "hid the packaged launcher with $HIDDEN"
+      $SUDO install -o "$DESK_USER" -g "$DESK_USER" -m 0644 -- "$TMP_ENTRY" "$ENTRY"
+      did "wrote $ENTRY"
     fi
-    rm -f "$TMP_HIDDEN"
+    rm -f "$TMP_ENTRY"
+
+    # Hide the packaged launcher. Clicking it starts the app against the central
+    # config, which is the whole thing this setup exists to avoid.
+    # A user-level copy with NoDisplay=true shadows the system entry by desktop
+    # file id, so the packaged file itself stays untouched and survives upgrades.
+    #
+    # Found by what it RUNS, not by what it is called. This looked only for
+    # claude-desktop.desktop, and the package ships com.anthropic.Claude.desktop,
+    # so it reported "nothing to hide" and hid nothing: the menu then held two
+    # Claude entries, and the plain one is a single click away from starting the
+    # app against the central ~/.claude. The isolation was intact and trivially
+    # bypassable, which is worse than either alone because the menu gave no hint
+    # which entry was which. A hardcoded filename is a guess about somebody else's
+    # packaging; the Exec line is the thing that actually matters.
+    FOUND_PACKAGED=0
+    for packaged in /usr/share/applications/*.desktop; do
+      [ -f "$packaged" ] || continue
+      # Ours, and any copy already shadowed, are not the packaged launcher.
+      case "$(basename "$packaged")" in "$APP_LAUNCHER.desktop") continue ;; esac
+      # Anchored to the start of the Exec value: the binary is either bare or a
+      # full path, and the -isolated launcher must not match, which is why the
+      # name has to end at a space or end of line.
+      grep -qE "$APP_EXEC_RE" "$packaged" || continue
+
+      FOUND_PACKAGED=1
+      HIDDEN="$DESKTOP_DIR/$(basename "$packaged")"
+      TMP_HIDDEN=$(mktemp)
+      # A short stub, not a copy of the packaged file with NoDisplay bolted on.
+      #
+      # The copy carried the packaged Actions across, and a desktop action is a
+      # second Exec line: `Actions=NewChat;NewCode;` with two [Desktop Action]
+      # groups, each starting the NON-isolated binary. Docks and launchers
+      # routinely offer actions from an entry's right-click menu, and several
+      # surface them from searches even when the entry itself is NoDisplay. So the
+      # copy hid the icon and left two live routes to the very thing being hidden.
+      #
+      # The name says what it is, too, because NoDisplay is a request rather than a
+      # guarantee: anything that does show this entry shows it labelled.
+      {
+        printf '[Desktop Entry]\n'
+        printf 'Name=%s (do not use - not isolated)\n' "$APP_LABEL"
+        grep -m1 '^Exec=' "$packaged"
+        grep -m1 '^Icon=' "$packaged" || printf 'Icon=%s\n' "$APP_ICON"
+        printf 'Type=Application\n'
+        printf 'NoDisplay=true\n'
+      } >"$TMP_HIDDEN"
+      if cmp -s "$TMP_HIDDEN" "$HIDDEN" 2>/dev/null; then
+        skip "packaged entry $(basename "$packaged") is already hidden"
+      else
+        $SUDO install -o "$DESK_USER" -g "$DESK_USER" -m 0644 -- "$TMP_HIDDEN" "$HIDDEN"
+        did "hid the packaged launcher with $HIDDEN"
+      fi
+      rm -f "$TMP_HIDDEN"
+    done
+    [ "$FOUND_PACKAGED" = 1 ] || skip "no packaged $APP_LABEL entry found, nothing to hide"
   done
-  [ "$FOUND_PACKAGED" = 1 ] || skip "no packaged Claude Desktop entry found, nothing to hide"
 fi
 
 # ─── restarts, or a refusal ──────────────────────────────────────────────────
