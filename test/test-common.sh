@@ -320,7 +320,8 @@ contains "$tunnel_src" 'DESK_WATCH_MAX_LIFE:-21600' "the watcher hands back to l
 # The backoff exists because launchd restarts a KeepAlive job as fast as
 # ThrottleInterval allows, and every restart against ousmousa spends a TOTP code
 # at the login prompt. A box switched off for an hour would burn 120 of them.
-contains "$tunnel_src" '"$wait" -gt 600' "a host that is simply off is retried at most every ten minutes"
+contains "$tunnel_src" '"$wait" -gt 120' "a host that is simply off is retried at least every two minutes"
+lacks "$tunnel_src" '"$wait" -gt 600' "the ten minute hold is gone"
 contains "$tunnel_code" "printf '0' > \"\$FAIL_FILE\"" "a tunnel that came up and dropped is rebuilt at once, not after a penalty"
 
 # ...and the hold has to end when its reason does. An outage drove the counter
@@ -328,6 +329,10 @@ contains "$tunnel_code" "printf '0' > \"\$FAIL_FILE\"" "a tunnel that came up an
 # for the remaining eight minutes of a penalty aimed at a box that was off. The
 # box was not off. Ask before serving the sentence.
 contains "$tunnel_src" 'desk_host_reachable' "a long hold is cut short once the far host answers again"
+# Asking once, before the hold, missed a host that came back a minute into it.
+backoff_code="$(awk '/^_backoff_then_exit\(\)/,/^}/' "$ROOT/bin/desk-tunnel")"
+contains "$backoff_code" 'while [ "$slept" -lt "$wait" ]' "the hold keeps asking whether the host is back, not just once"
+contains "$backoff_code" 'Ending the hold' "a host answering mid-hold ends it at once"
 
 # Every exit says why. Removing the backoff trap once the tunnel was up left the
 # whole watching phase silent, so a run could end and be restarted with nothing
